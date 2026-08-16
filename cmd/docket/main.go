@@ -587,6 +587,19 @@ func calContext(ctx context.Context, calendarID string) (*caldav.Client, string,
 	return client, resolvedID, out.ExitOK
 }
 
+// calTarget resolves a --calendar value to a CalDAV client plus either a
+// concrete resolved calendar id or, for the special value "all", the
+// account's home id (its email address, resolved via primary) from which
+// every calendar can be enumerated (see cal.ListCalendars).
+func calTarget(ctx context.Context, calendarID string) (*caldav.Client, string, bool, int) {
+	if calendarID == "all" {
+		client, homeID, code := calContext(ctx, cal.PrimaryCalendar)
+		return client, homeID, true, code
+	}
+	client, id, code := calContext(ctx, calendarID)
+	return client, id, false, code
+}
+
 // requireTZ resolves --tz. Unlike the REST API, Google's CalDAV interface
 // has no cheap way to ask a calendar its configured timezone, so --tz is
 // required rather than defaulted — silently falling back to the server's
@@ -611,27 +624,33 @@ func requireTZ(tzFlag, usage string) (*time.Location, int) {
 func cmdCalAgenda(ctx context.Context, args []string) int {
 	fs := newFlagSet("cal agenda")
 	days := fs.Int("days", 7, "how many days ahead to list")
-	calendarID := fs.String("calendar", calDefaultCalendar(), "calendar id")
+	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id (all = every calendar)")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket cal agenda [--days 7] [--calendar primary] --tz <zone>")
+		return usageError(err.Error(), "docket cal agenda [--days 7] [--calendar primary|all] --tz <zone>")
 	}
 	if *days <= 0 {
 		return usageError("--days must be positive",
-			"docket cal agenda [--days 7] [--calendar primary] --tz <zone>")
+			"docket cal agenda [--days 7] [--calendar primary|all] --tz <zone>")
 	}
-	loc, code := requireTZ(*tz, "docket cal agenda [--days 7] [--calendar primary]")
+	loc, code := requireTZ(*tz, "docket cal agenda [--days 7] [--calendar primary|all]")
 	if code != out.ExitOK {
 		return code
 	}
 
-	client, calendarIDResolved, code := calContext(ctx, *calendarID)
+	client, target, allCalendars, code := calTarget(ctx, *calendarID)
 	if code != out.ExitOK {
 		return code
 	}
 
 	now := time.Now().In(loc)
-	events, err := cal.Agenda(ctx, client, calendarIDResolved, now, now.AddDate(0, 0, *days), loc)
+	var events []cal.Event
+	var err error
+	if allCalendars {
+		events, err = cal.AgendaAll(ctx, client, target, now, now.AddDate(0, 0, *days), loc)
+	} else {
+		events, err = cal.Agenda(ctx, client, target, now, now.AddDate(0, 0, *days), loc)
+	}
 	if err != nil {
 		return out.Fail(out.ExitError, "CALENDAR_API_ERROR", err.Error(), true)
 	}
@@ -641,7 +660,7 @@ func cmdCalAgenda(ctx context.Context, args []string) int {
 func cmdCalShow(ctx context.Context, args []string) int {
 	fs := newFlagSet("cal show")
 	id := fs.String("id", "", "event id, from an agenda/find-slot result")
-	calendarID := fs.String("calendar", calDefaultCalendar(), "calendar id")
+	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
 	if err := fs.Parse(args); err != nil {
 		return usageError(err.Error(), "docket cal show --id <event-id> [--calendar primary] --tz <zone>")
@@ -672,21 +691,21 @@ func cmdCalFreeBusy(ctx context.Context, args []string) int {
 	fs := newFlagSet("cal freebusy")
 	start := fs.String("start", "", "start of the window, e.g. \"now\" or RFC3339")
 	end := fs.String("end", "", "end of the window, e.g. \"+3d\" or RFC3339")
-	calendarID := fs.String("calendar", calDefaultCalendar(), "calendar id")
+	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id (all = every calendar)")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket cal freebusy --start ... --end ... [--calendar primary] --tz <zone>")
+		return usageError(err.Error(), "docket cal freebusy --start ... --end ... [--calendar primary|all] --tz <zone>")
 	}
 	if *start == "" || *end == "" {
 		return usageError("--start and --end are both required",
-			"docket cal freebusy --start now --end +3d [--calendar primary] --tz <zone>")
+			"docket cal freebusy --start now --end +3d [--calendar primary|all] --tz <zone>")
 	}
-	loc, code := requireTZ(*tz, "docket cal freebusy --start ... --end ... [--calendar primary]")
+	loc, code := requireTZ(*tz, "docket cal freebusy --start ... --end ... [--calendar primary|all]")
 	if code != out.ExitOK {
 		return code
 	}
 
-	client, calendarIDResolved, code := calContext(ctx, *calendarID)
+	client, target, allCalendars, code := calTarget(ctx, *calendarID)
 	if code != out.ExitOK {
 		return code
 	}
@@ -700,7 +719,19 @@ func cmdCalFreeBusy(ctx context.Context, args []string) int {
 		return usageError(err.Error(), "docket cal freebusy --start ... --end ...")
 	}
 
-	fb, err := cal.FreeBusy(ctx, client, []string{calendarIDResolved}, startT, endT, loc)
+	ids := []string{target}
+	if allCalendars {
+		cals, err := cal.ListCalendars(ctx, client, target)
+		if err != nil {
+			return out.Fail(out.ExitError, "CALENDAR_API_ERROR", err.Error(), true)
+		}
+		ids = make([]string, 0, len(cals))
+		for _, c := range cals {
+			ids = append(ids, c.ID)
+		}
+	}
+
+	fb, err := cal.FreeBusy(ctx, client, ids, startT, endT, loc)
 	if err != nil {
 		return out.Fail(out.ExitError, "CALENDAR_API_ERROR", err.Error(), true)
 	}
@@ -716,22 +747,22 @@ func cmdCalFindSlot(ctx context.Context, args []string) int {
 	duration := fs.String("duration", "", "minimum slot length, e.g. \"45m\"")
 	within := fs.String("within", "5d", "how far ahead to search, e.g. \"5d\"")
 	hours := fs.String("hours", "09:00-17:00", "daily search window, e.g. \"09:00-17:00\"")
-	calendarID := fs.String("calendar", calDefaultCalendar(), "calendar id")
+	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id (all = across every calendar)")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
 	if err := fs.Parse(args); err != nil {
 		return usageError(err.Error(),
-			"docket cal find-slot --duration 45m --within 5d --hours 09:00-17:00 --tz <IANA zone>")
+			"docket cal find-slot --duration 45m --within 5d --hours 09:00-17:00 [--calendar primary|all] --tz <zone>")
 	}
 	if *duration == "" {
 		return usageError("--duration is required, e.g. \"--duration 45m\"",
-			"docket cal find-slot --duration 45m --within 5d --hours 09:00-17:00 --tz <zone>")
+			"docket cal find-slot --duration 45m --within 5d --hours 09:00-17:00 [--calendar primary|all] --tz <zone>")
 	}
 	loc, code := requireTZ(*tz, "docket cal find-slot --duration 45m --within 5d --hours 09:00-17:00")
 	if code != out.ExitOK {
 		return code
 	}
 
-	client, calendarIDResolved, code := calContext(ctx, *calendarID)
+	client, target, allCalendars, code := calTarget(ctx, *calendarID)
 	if code != out.ExitOK {
 		return code
 	}
@@ -750,7 +781,18 @@ func cmdCalFindSlot(ctx context.Context, args []string) int {
 	}
 
 	now := time.Now().In(loc)
-	slots, err := cal.FindSlot(ctx, client, calendarIDResolved, dur, now, now.Add(withinDur), hourRange, loc)
+	ids := []string{target}
+	if allCalendars {
+		cals, err := cal.ListCalendars(ctx, client, target)
+		if err != nil {
+			return out.Fail(out.ExitError, "CALENDAR_API_ERROR", err.Error(), true)
+		}
+		ids = make([]string, 0, len(cals))
+		for _, c := range cals {
+			ids = append(ids, c.ID)
+		}
+	}
+	slots, err := cal.FindSlot(ctx, client, ids, dur, now, now.Add(withinDur), hourRange, loc)
 	if err != nil {
 		return out.Fail(out.ExitError, "CALENDAR_API_ERROR", err.Error(), true)
 	}

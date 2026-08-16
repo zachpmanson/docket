@@ -13,12 +13,14 @@ import (
 // calendar doesn't dump hundreds of near-identical gaps on the agent.
 const maxSlots = 10
 
-// FindSlot finds open gaps of at least duration on calendarID, within
-// [windowStart, windowEnd), restricted to hours-of-day (in loc) on each
-// calendar day. Built on FreeBusy per docket-design.md §5 — this is the
-// highest-value calendar command for an agent, turning "when can we meet"
-// from several round-trips of reasoning over raw events into one call.
-func FindSlot(ctx context.Context, client *caldav.Client, calendarID string, duration time.Duration,
+// FindSlot finds open gaps of at least duration across the given
+// calendarIDs, within [windowStart, windowEnd), restricted to hours-of-day
+// (in loc) on each calendar day. Built on FreeBusy per docket-design.md §5
+// — this is the highest-value calendar command for an agent, turning "when
+// can we meet" from several round-trips of reasoning over raw events into
+// one call. Passing every calendar's id (as --calendar all does) makes the
+// gaps respect busy time from all of them at once.
+func FindSlot(ctx context.Context, client *caldav.Client, calendarIDs []string, duration time.Duration,
 	windowStart, windowEnd time.Time, hours HourRange, loc *time.Location) ([]TimeRange, error) {
 
 	if duration <= 0 {
@@ -29,14 +31,18 @@ func FindSlot(ctx context.Context, client *caldav.Client, calendarID string, dur
 			windowEnd.Format(time.RFC3339), windowStart.Format(time.RFC3339))
 	}
 
-	fb, err := FreeBusy(ctx, client, []string{calendarID}, windowStart, windowEnd, loc)
+	fb, err := FreeBusy(ctx, client, calendarIDs, windowStart, windowEnd, loc)
 	if err != nil {
 		return nil, err
 	}
 
-	busy, err := parseBusyRanges(fb.Busy[calendarID], loc)
-	if err != nil {
-		return nil, err
+	var busy [][2]time.Time
+	for _, id := range calendarIDs {
+		rs, err := parseBusyRanges(fb.Busy[id], loc)
+		if err != nil {
+			return nil, err
+		}
+		busy = append(busy, rs...)
 	}
 	busy = mergeRanges(busy)
 

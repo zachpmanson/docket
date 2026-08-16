@@ -19,6 +19,11 @@ type Event struct {
 	Status    string   `json:"status"`
 	Calendar  string   `json:"calendar"`
 
+	// CalendarName is the display name of the event's source calendar,
+	// populated only when the event came from a multi-calendar query
+	// (--calendar all).
+	CalendarName string `json:"calendar_name,omitempty"`
+
 	// Transparent is true when the event is marked TRANSP:TRANSPARENT
 	// (Google's "Show me as available during this event"). Not part of the
 	// agent-facing shape — used internally by FreeBusy to decide what

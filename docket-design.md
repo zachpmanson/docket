@@ -291,11 +291,19 @@ docket cal delete    --id <event-id> [--confirm]
 DSL. Verified live: a created recurring event's RRULE round-trips correctly through
 `cal show`'s expansion.
 
-Every `cal` subcommand's `--calendar` flag defaults to the account's own primary calendar
-unless `config.toml` sets a `default_calendar` key (any CalDAV calendar id, e.g. a
-`@group.calendar.google.com` id discovered via calendar-home PROPFIND). A bare
-`docket cal create ...` therefore targets the configured default; an explicit `--calendar`
-flag always wins.
+Every `cal` subcommand's `--calendar` flag defaults to the account's own primary calendar unless
+`config.toml` sets a `default_calendar` key (any CalDAV calendar id, e.g. a
+`@group.calendar.google.com` id discovered via calendar-home PROPFIND).
+**Reads and writes split:** `agenda`/`show`/`freebusy`/`find-slot` default to `primary` ("what's
+on" stays about the real schedule), while `create`/`update`/`delete` default to `default_calendar`
+(docket-created events collect there). An explicit `--calendar` flag always wins.
+
+`agenda`/`freebusy`/`find-slot` also accept the special value `--calendar all`: the calendar home
+is enumerated via PROPFIND (`cal.ListCalendars`) and every calendar is queried, with results
+merged (agenda sorts by start and tags each event with its source `calendar_name`; freebusy and
+find-slot treat busy as the union across all calendars, so slots respect holidays/shared/work
+calendars automatically). `Events` from a multi-calendar query carry `calendar_name` in addition
+to the raw `calendar` id.
 
 Known gap: `cal update --location ""` doesn't clear the location — an empty flag value is
 indistinguishable from "not provided" in the current flag handling, so there's currently no
