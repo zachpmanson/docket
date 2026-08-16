@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -94,6 +95,15 @@ func writeGate(kind, disableEnvVar string, confirm, dryRun bool, preview any, re
 				"shown but with --confirm added: "+rerun, false)
 	}
 	return true, out.ExitOK
+}
+
+// calOwnEventsOnly reports whether this deployment restricts cal update/
+// delete to events docket itself created (see docket-design.md §5's "soft
+// write" mode) — a middle ground between fully read-only and full write
+// access, e.g. for an agent that should manage its own calendar entries but
+// never touch anything a human created directly.
+func calOwnEventsOnly() bool {
+	return os.Getenv("DOCKET_CAL_OWN_EVENTS_ONLY") != ""
 }
 
 // withOptionalFlag appends --name "value" to cmd if value is non-empty, for
@@ -865,8 +875,11 @@ func cmdCalUpdate(ctx context.Context, args []string) int {
 		startPtr, endPtr = &startT, &endT
 	}
 
-	plan, err := cal.PrepareUpdate(ctx, client, calendarIDResolved, *id, loc, summaryPtr, startPtr, endPtr, false, locationPtr)
+	plan, err := cal.PrepareUpdate(ctx, client, calendarIDResolved, *id, loc, summaryPtr, startPtr, endPtr, false, locationPtr, calOwnEventsOnly())
 	if err != nil {
+		if errors.Is(err, cal.ErrNotOwned) {
+			return out.Fail(out.ExitConfirmMissing, "NOT_OWNED", err.Error(), false)
+		}
 		return out.Fail(out.ExitNotFound, "EVENT_NOT_FOUND", err.Error(), false)
 	}
 
@@ -912,8 +925,11 @@ func cmdCalDelete(ctx context.Context, args []string) int {
 		return code
 	}
 
-	plan, err := cal.PrepareDelete(ctx, client, calendarIDResolved, *id, loc)
+	plan, err := cal.PrepareDelete(ctx, client, calendarIDResolved, *id, loc, calOwnEventsOnly())
 	if err != nil {
+		if errors.Is(err, cal.ErrNotOwned) {
+			return out.Fail(out.ExitConfirmMissing, "NOT_OWNED", err.Error(), false)
+		}
 		return out.Fail(out.ExitNotFound, "EVENT_NOT_FOUND", err.Error(), false)
 	}
 

@@ -316,6 +316,25 @@ Calendar API accepts a client-supplied event `id` on insert. Have `create` take 
 `--idempotency-key`, hash it into a valid event id, and treat a 409 as success. Agents retry;
 without this you get duplicate events.
 
+### Soft writes: `DOCKET_CAL_OWN_EVENTS_ONLY`
+
+Between fully read-only and full write access there's a useful middle ground for an agent
+deployment: let it manage events it created itself, but never touch anything a human created
+directly. Every event `cal create` makes gets a `[docket]` marker written into its
+`DESCRIPTION`; `cal update`/`cal delete` check for that marker when
+`DOCKET_CAL_OWN_EVENTS_ONLY` is set (any non-empty value) and refuse — exit code 6,
+`NOT_OWNED` — if it's missing. `cal create` itself is never restricted by this (a freshly
+created event is definitionally the agent's own).
+
+A description marker rather than an id-format check (e.g. inspecting the synthetic uid's
+`@docket` suffix) is deliberate: it's visible if Zach opens the event in Google Calendar's own
+UI, so the ownership boundary isn't just an internal implementation detail — he can see at a
+glance which events an agent made. The tradeoff: if someone manually clears an event's
+description, docket stops recognizing it as its own; judged an acceptable edge case.
+
+This combines with `DOCKET_CAL_READONLY` (checked first, and wins if both are set) to give a
+deployment three tiers: fully open, own-events-only, fully closed.
+
 ---
 
 ## 6. Agent interface contract
@@ -359,6 +378,23 @@ sequence number).
 Code 6 matters more than it looks. It lets the agent propose an action, get a structured
 refusal describing exactly what would have happened, and surface that to you for approval —
 rather than either acting unilaterally or having to reason about safety itself.
+
+### Operator controls
+
+Every mutating command checks these environment variables, in order, before even looking at
+`--confirm`/`--dry-run` — a human can shut off writes without touching agent-facing flags or
+redeploying anything, e.g. by editing a systemd unit's `Environment=`. Any non-empty value
+counts as set.
+
+| Variable | Effect |
+|---|---|
+| `DOCKET_READONLY` | Disables all mail and calendar writes. |
+| `DOCKET_MAIL_READONLY` | Disables `mail send`/`reply`/`label` only. |
+| `DOCKET_CAL_READONLY` | Disables `cal create`/`update`/`delete` only. |
+| `DOCKET_CAL_OWN_EVENTS_ONLY` | `cal update`/`delete` refuse anything not created via `cal create` — see §5 "Soft writes". `cal create` is unaffected. |
+
+A refusal from any of these is `WRITES_DISABLED` (or `NOT_OWNED` for the last one), exit code
+6, same category as a missing `--confirm` — refused, not failed.
 
 ### Self-description
 

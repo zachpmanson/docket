@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,6 +14,12 @@ import (
 	"github.com/emersion/go-webdav/caldav"
 	"github.com/teambition/rrule-go"
 )
+
+// ErrNotOwned is wrapped into the error PrepareUpdate/PrepareDelete return
+// when restrictToOwn refuses an event — distinguishable via errors.Is so
+// callers can pick a "refused" exit code rather than "not found" (the event
+// exists; the deployment just won't let this write touch it).
+var ErrNotOwned = errors.New("event not created by docket")
 
 // ParseRRule validates a raw RFC 5545 RRULE value (e.g.
 // "FREQ=WEEKLY;BYDAY=MO,WE,FR"), the same native-syntax-passthrough
@@ -37,6 +44,18 @@ func isNotFoundErr(err error) bool {
 
 func eventObjectPath(calendarID, uid string) string {
 	return eventsPath(calendarID) + "/" + uid + ".ics"
+}
+
+// ownedMarker is written into DESCRIPTION on every event docket creates,
+// and checked on update/delete when a deployment restricts writes to
+// events docket itself created (see cmd/docket's DOCKET_CAL_OWN_EVENTS_ONLY
+// and docket-design.md §5's "soft write" mode). A description marker, not
+// an id-format check, so it's visible if Zach opens the event in Google
+// Calendar's own UI — he can see at a glance which events an agent made.
+const ownedMarker = "[docket]"
+
+func isOwnedEvent(description string) bool {
+	return strings.Contains(description, ownedMarker)
 }
 
 // eventUID returns a deterministic uid derived from idempotencyKey (so a
@@ -81,6 +100,7 @@ func buildEventCalendar(uid, summary string, start, end time.Time, allDay bool, 
 		event.Props.SetDateTime(ical.PropDateTimeEnd, end)
 	}
 	event.Props.SetText(ical.PropSummary, summary)
+	event.Props.SetText(ical.PropDescription, ownedMarker)
 	if location != "" {
 		event.Props.SetText(ical.PropLocation, location)
 	}
@@ -214,9 +234,11 @@ type UpdatePlan struct {
 // newSummary/newStart+newEnd/newLocation are non-nil, without writing
 // anything. Updating a recurring event's id affects the entire series, not
 // just that occurrence — see docket-design.md §5's known limitations;
-// Warning is set when this applies.
+// Warning is set when this applies. If restrictToOwn is true, only events
+// docket itself created (marked via ownedMarker, see docket-design.md §5's
+// "soft write" mode) can be updated — anything else is refused.
 func PrepareUpdate(ctx context.Context, client *caldav.Client, calendarID, id string, loc *time.Location,
-	newSummary *string, newStart, newEnd *time.Time, allDay bool, newLocation *string) (*UpdatePlan, error) {
+	newSummary *string, newStart, newEnd *time.Time, allDay bool, newLocation *string, restrictToOwn bool) (*UpdatePlan, error) {
 
 	uid, _, err := parseEventID(id, loc)
 	if err != nil {
@@ -232,6 +254,17 @@ func PrepareUpdate(ctx context.Context, client *caldav.Client, calendarID, id st
 	master, err := findMasterComponent(obj.Data, uid)
 	if err != nil {
 		return nil, err
+	}
+
+	if restrictToOwn {
+		desc, _ := master.Props.Text(ical.PropDescription)
+		if !isOwnedEvent(desc) {
+			return nil, fmt.Errorf(
+				"this deployment only allows editing events created via `cal create` (this event's "+
+					"description doesn't carry docket's marker, meaning a human created it directly, "+
+					"e.g. in Google Calendar) — a human must change DOCKET_CAL_OWN_EVENTS_ONLY to modify it: %w",
+				ErrNotOwned)
+		}
 	}
 
 	changes := map[string]string{}
@@ -311,8 +344,10 @@ type DeletePlan struct {
 // in a --dry-run preview or confirmation, without deleting anything.
 // Deleting a recurring event's id removes the entire series, not just that
 // occurrence — see docket-design.md §5's known limitations; Warning is set
-// when this applies.
-func PrepareDelete(ctx context.Context, client *caldav.Client, calendarID, id string, loc *time.Location) (*DeletePlan, error) {
+// when this applies. If restrictToOwn is true, only events docket itself
+// created (marked via ownedMarker, see docket-design.md §5's "soft write"
+// mode) can be deleted — anything else is refused.
+func PrepareDelete(ctx context.Context, client *caldav.Client, calendarID, id string, loc *time.Location, restrictToOwn bool) (*DeletePlan, error) {
 	uid, occStart, err := parseEventID(id, loc)
 	if err != nil {
 		return nil, err
@@ -329,6 +364,17 @@ func PrepareDelete(ctx context.Context, client *caldav.Client, calendarID, id st
 		return nil, err
 	}
 	summary, _ := master.Props.Text(ical.PropSummary)
+
+	if restrictToOwn {
+		desc, _ := master.Props.Text(ical.PropDescription)
+		if !isOwnedEvent(desc) {
+			return nil, fmt.Errorf(
+				"this deployment only allows deleting events created via `cal create` (this event's "+
+					"description doesn't carry docket's marker, meaning a human created it directly, "+
+					"e.g. in Google Calendar) — a human must change DOCKET_CAL_OWN_EVENTS_ONLY to delete it: %w",
+				ErrNotOwned)
+		}
+	}
 
 	plan := &DeletePlan{
 		ID: id, Calendar: calendarID, Summary: summary, Start: occStart.Format(time.RFC3339),
