@@ -540,6 +540,22 @@ func cmdMailLabel(ctx context.Context, args []string) int {
 
 // --- cal ---
 
+// calDefaultCalendar returns the configured default calendar id, or
+// cal.PrimaryCalendar (the account's own calendar) when unset/unreadable.
+// feeds the --calendar flag default in every cal subcommand, so the
+// config's default_calendar key is what a bare `docket cal create ...`
+// targets. An explicit --calendar flag still wins.
+func calDefaultCalendar() string {
+	cfg, err := auth.LoadConfig()
+	if err != nil {
+		return cal.PrimaryCalendar
+	}
+	if cfg.DefaultCalendar != "" {
+		return cfg.DefaultCalendar
+	}
+	return cal.PrimaryCalendar
+}
+
 // calContext builds the CalDAV client shared by every cal subcommand, and
 // resolves "primary" to the account's actual email address — Google's
 // CalDAV interface has no literal "primary" calendar id the way the REST
@@ -595,7 +611,7 @@ func requireTZ(tzFlag, usage string) (*time.Location, int) {
 func cmdCalAgenda(ctx context.Context, args []string) int {
 	fs := newFlagSet("cal agenda")
 	days := fs.Int("days", 7, "how many days ahead to list")
-	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id")
+	calendarID := fs.String("calendar", calDefaultCalendar(), "calendar id")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
 	if err := fs.Parse(args); err != nil {
 		return usageError(err.Error(), "docket cal agenda [--days 7] [--calendar primary] --tz <zone>")
@@ -625,7 +641,7 @@ func cmdCalAgenda(ctx context.Context, args []string) int {
 func cmdCalShow(ctx context.Context, args []string) int {
 	fs := newFlagSet("cal show")
 	id := fs.String("id", "", "event id, from an agenda/find-slot result")
-	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id")
+	calendarID := fs.String("calendar", calDefaultCalendar(), "calendar id")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
 	if err := fs.Parse(args); err != nil {
 		return usageError(err.Error(), "docket cal show --id <event-id> [--calendar primary] --tz <zone>")
@@ -656,7 +672,7 @@ func cmdCalFreeBusy(ctx context.Context, args []string) int {
 	fs := newFlagSet("cal freebusy")
 	start := fs.String("start", "", "start of the window, e.g. \"now\" or RFC3339")
 	end := fs.String("end", "", "end of the window, e.g. \"+3d\" or RFC3339")
-	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id")
+	calendarID := fs.String("calendar", calDefaultCalendar(), "calendar id")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
 	if err := fs.Parse(args); err != nil {
 		return usageError(err.Error(), "docket cal freebusy --start ... --end ... [--calendar primary] --tz <zone>")
@@ -700,7 +716,7 @@ func cmdCalFindSlot(ctx context.Context, args []string) int {
 	duration := fs.String("duration", "", "minimum slot length, e.g. \"45m\"")
 	within := fs.String("within", "5d", "how far ahead to search, e.g. \"5d\"")
 	hours := fs.String("hours", "09:00-17:00", "daily search window, e.g. \"09:00-17:00\"")
-	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id")
+	calendarID := fs.String("calendar", calDefaultCalendar(), "calendar id")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
 	if err := fs.Parse(args); err != nil {
 		return usageError(err.Error(),
@@ -750,7 +766,7 @@ func cmdCalCreate(ctx context.Context, args []string) int {
 	attendees := fs.String("attendees", "", "comma-separated attendee email addresses (optional)")
 	rruleFlag := fs.String("rrule", "",
 		"RFC 5545 recurrence rule, e.g. \"FREQ=WEEKLY;BYDAY=MO,WE,FR\" (optional; makes the event recurring)")
-	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id")
+	calendarID := fs.String("calendar", calDefaultCalendar(), "calendar id")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
 	idempotencyKey := fs.String("idempotency-key", "",
 		"reuse the same value on retry so a resend doesn't create a duplicate event")
@@ -821,7 +837,7 @@ func cmdCalCreate(ctx context.Context, args []string) int {
 func cmdCalUpdate(ctx context.Context, args []string) int {
 	fs := newFlagSet("cal update")
 	id := fs.String("id", "", "event id, from `cal agenda` output")
-	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id")
+	calendarID := fs.String("calendar", calDefaultCalendar(), "calendar id")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
 	summary := fs.String("summary", "", "new title (optional)")
 	start := fs.String("start", "", "new start time (optional; requires --duration too)")
@@ -906,7 +922,7 @@ func cmdCalUpdate(ctx context.Context, args []string) int {
 func cmdCalDelete(ctx context.Context, args []string) int {
 	fs := newFlagSet("cal delete")
 	id := fs.String("id", "", "event id, from `cal agenda` output")
-	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id")
+	calendarID := fs.String("calendar", calDefaultCalendar(), "calendar id")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
 	confirm := fs.Bool("confirm", false, "actually delete (required)")
 	dryRun := fs.Bool("dry-run", false, "preview without deleting")

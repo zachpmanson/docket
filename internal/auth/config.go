@@ -24,8 +24,11 @@ type Provider struct {
 }
 
 // Config is the top-level shape of ~/.config/docket/config.toml.
+// DefaultCalendar, when set, is the calendar id new/listing operations fall
+// back to when no --calendar flag is given ("primary" otherwise).
 type Config struct {
-	Provider Provider `toml:"provider"`
+	Provider        Provider `toml:"provider"`
+	DefaultCalendar string   `toml:"default_calendar"`
 }
 
 // ConfigPath returns the path to config.toml, honoring XDG_CONFIG_HOME.

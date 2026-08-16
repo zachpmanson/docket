@@ -1,3 +1,13 @@
+# Default calendar for `docket cal *` commands without an explicit --calendar.
+# This is the CalDAV calendar id of the "Docket" calendar on zachpmanson@gmail.com
+# (discovered via calendar-home PROPFIND). Leaving it unset falls back to the
+# account's own primary calendar, as before.
+#
+# NOTE: must stay ABOVE the [provider] table header — TOML assigns every key
+# after a header to that table, so this would decode as provider.default_calendar
+# otherwise.
+default_calendar = "c58fca62a8cdaaf713956f6620bd7c39ef0892e91aa289e603c07f435eee7831@group.calendar.google.com"
+
 [provider]
 # Values pinned from searchfox.org/comm-central/source/mailnews/base/src/OAuth2Providers.sys.mjs
 # Verify use_pkce and redirect_uri against current source if login ever breaks.

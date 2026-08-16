@@ -291,6 +291,12 @@ docket cal delete    --id <event-id> [--confirm]
 DSL. Verified live: a created recurring event's RRULE round-trips correctly through
 `cal show`'s expansion.
 
+Every `cal` subcommand's `--calendar` flag defaults to the account's own primary calendar
+unless `config.toml` sets a `default_calendar` key (any CalDAV calendar id, e.g. a
+`@group.calendar.google.com` id discovered via calendar-home PROPFIND). A bare
+`docket cal create ...` therefore targets the configured default; an explicit `--calendar`
+flag always wins.
+
 Known gap: `cal update --location ""` doesn't clear the location — an empty flag value is
 indistinguishable from "not provided" in the current flag handling, so there's currently no
 way to blank out a field once set. Low priority; revisit if it's actually needed.
