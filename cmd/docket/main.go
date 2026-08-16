@@ -773,6 +773,7 @@ func cmdCalCreate(ctx context.Context, args []string) int {
 	if err != nil {
 		return usageError(err.Error(), "docket cal create --start ...")
 	}
+	startT = startT.In(loc)
 	dur, err := cal.ParseDuration(*duration)
 	if err != nil {
 		return usageError(err.Error(), "docket cal create --duration 45m ...")
@@ -867,6 +868,7 @@ func cmdCalUpdate(ctx context.Context, args []string) int {
 		if err != nil {
 			return usageError(err.Error(), "docket cal update --start ...")
 		}
+		startT = startT.In(loc)
 		dur, err := cal.ParseDuration(*duration)
 		if err != nil {
 			return usageError(err.Error(), "docket cal update --duration 45m ...")
