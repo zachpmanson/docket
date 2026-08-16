@@ -28,7 +28,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) < 1 {
-		return usageError("missing command", "docket <auth|mail> <subcommand> [flags]")
+		return usageError("missing command", "docket <auth|mail|cal> <subcommand> [flags]")
 	}
 
 	ctx := context.Background()
@@ -53,6 +53,19 @@ func run(args []string) int {
 func usageError(problem, correctUsage string) int {
 	msg := fmt.Sprintf("%s. Usage: %s", problem, correctUsage)
 	return out.Fail(out.ExitUsage, "USAGE_ERROR", msg, false)
+}
+
+// newFlagSet builds a FlagSet for a subcommand with its default usage
+// output suppressed. Without this, the standard library prints its own
+// "flag provided but not defined" + flag-by-flag usage text straight to
+// stderr on every parse error — noise that duplicates (inconsistently
+// formatted) what usageError already puts in the JSON envelope. See
+// docket-design.md §1 principle 7: errors are for the agent, not a
+// terminal, and every response should be the one structured envelope.
+func newFlagSet(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	return fs
 }
 
 // writeGate enforces the write-safety contract every mutating command
@@ -81,6 +94,18 @@ func writeGate(kind, disableEnvVar string, confirm, dryRun bool, preview any, re
 				"shown but with --confirm added: "+rerun, false)
 	}
 	return true, out.ExitOK
+}
+
+// withOptionalFlag appends --name "value" to cmd if value is non-empty, for
+// building a --confirm rerun hint that reflects every flag the agent
+// actually passed — dropping one here means the "re-run exactly as shown"
+// promise in writeGate silently produces a different result than what was
+// just previewed.
+func withOptionalFlag(cmd, name, value string) string {
+	if value == "" {
+		return cmd
+	}
+	return fmt.Sprintf("%s --%s %q", cmd, name, value)
 }
 
 // splitCommaList splits a comma-separated flag value, trimming whitespace
@@ -268,7 +293,7 @@ func mailContext(ctx context.Context) (*gmail.Service, *mail.LabelCache, int) {
 }
 
 func cmdMailSearch(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("mail search", flag.ContinueOnError)
+	fs := newFlagSet("mail search")
 	query := fs.String("query", "", "Gmail search query, e.g. \"from:emiel is:unread\"")
 	limit := fs.Int64("limit", 25, "max results to return")
 	if err := fs.Parse(args); err != nil {
@@ -292,7 +317,7 @@ func cmdMailSearch(ctx context.Context, args []string) int {
 }
 
 func cmdMailList(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("mail list", flag.ContinueOnError)
+	fs := newFlagSet("mail list")
 	label := fs.String("label", "INBOX", "label name to list, e.g. INBOX")
 	limit := fs.Int64("limit", 25, "max results to return")
 	unread := fs.Bool("unread", false, "only unread messages")
@@ -327,7 +352,7 @@ func cmdMailList(ctx context.Context, args []string) int {
 }
 
 func cmdMailRead(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("mail read", flag.ContinueOnError)
+	fs := newFlagSet("mail read")
 	id := fs.String("id", "", "Gmail message id, from a search/list/thread result")
 	maxBytes := fs.Int("max-bytes", 20000, "truncate body at this many bytes")
 	if err := fs.Parse(args); err != nil {
@@ -352,7 +377,7 @@ func cmdMailRead(ctx context.Context, args []string) int {
 }
 
 func cmdMailThread(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("mail thread", flag.ContinueOnError)
+	fs := newFlagSet("mail thread")
 	id := fs.String("id", "", "Gmail thread id, from a search/list/read result's thread_id")
 	if err := fs.Parse(args); err != nil {
 		return usageError(err.Error(), "docket mail thread --id <gm-thread-id>")
@@ -376,7 +401,7 @@ func cmdMailThread(ctx context.Context, args []string) int {
 }
 
 func cmdMailSend(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("mail send", flag.ContinueOnError)
+	fs := newFlagSet("mail send")
 	to := fs.String("to", "", "recipient address(es), comma-separated")
 	subject := fs.String("subject", "", "subject line")
 	bodyFile := fs.String("body-file", "", "path to plain-text body, or - for stdin")
@@ -418,7 +443,7 @@ func cmdMailSend(ctx context.Context, args []string) int {
 }
 
 func cmdMailReply(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("mail reply", flag.ContinueOnError)
+	fs := newFlagSet("mail reply")
 	id := fs.String("id", "", "id of the message being replied to")
 	bodyFile := fs.String("body-file", "", "path to plain-text body, or - for stdin")
 	confirm := fs.Bool("confirm", false, "actually send (required)")
@@ -459,7 +484,7 @@ func cmdMailReply(ctx context.Context, args []string) int {
 }
 
 func cmdMailLabel(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("mail label", flag.ContinueOnError)
+	fs := newFlagSet("mail label")
 	id := fs.String("id", "", "message id")
 	add := fs.String("add", "", "comma-separated label names to add")
 	remove := fs.String("remove", "", "comma-separated label names to remove")
@@ -558,7 +583,7 @@ func requireTZ(tzFlag, usage string) (*time.Location, int) {
 }
 
 func cmdCalAgenda(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("cal agenda", flag.ContinueOnError)
+	fs := newFlagSet("cal agenda")
 	days := fs.Int("days", 7, "how many days ahead to list")
 	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
@@ -588,7 +613,7 @@ func cmdCalAgenda(ctx context.Context, args []string) int {
 }
 
 func cmdCalShow(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("cal show", flag.ContinueOnError)
+	fs := newFlagSet("cal show")
 	id := fs.String("id", "", "event id, from an agenda/find-slot result")
 	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
@@ -618,7 +643,7 @@ func cmdCalShow(ctx context.Context, args []string) int {
 }
 
 func cmdCalFreeBusy(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("cal freebusy", flag.ContinueOnError)
+	fs := newFlagSet("cal freebusy")
 	start := fs.String("start", "", "start of the window, e.g. \"now\" or RFC3339")
 	end := fs.String("end", "", "end of the window, e.g. \"+3d\" or RFC3339")
 	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id")
@@ -661,7 +686,7 @@ func cmdCalFreeBusy(ctx context.Context, args []string) int {
 }
 
 func cmdCalFindSlot(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("cal find-slot", flag.ContinueOnError)
+	fs := newFlagSet("cal find-slot")
 	duration := fs.String("duration", "", "minimum slot length, e.g. \"45m\"")
 	within := fs.String("within", "5d", "how far ahead to search, e.g. \"5d\"")
 	hours := fs.String("hours", "09:00-17:00", "daily search window, e.g. \"09:00-17:00\"")
@@ -707,7 +732,7 @@ func cmdCalFindSlot(ctx context.Context, args []string) int {
 }
 
 func cmdCalCreate(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("cal create", flag.ContinueOnError)
+	fs := newFlagSet("cal create")
 	summary := fs.String("summary", "", "event title")
 	start := fs.String("start", "", "start time, e.g. \"tomorrow 14:00\" or RFC3339")
 	duration := fs.String("duration", "", "event length, e.g. \"45m\"")
@@ -763,8 +788,13 @@ func cmdCalCreate(ctx context.Context, args []string) int {
 		return usageError(err.Error(), "docket cal create --summary ... --start ... --duration ...")
 	}
 
-	rerun := fmt.Sprintf("docket cal create --summary %q --start %q --duration %s --calendar %s --tz %s --confirm",
+	rerun := fmt.Sprintf("docket cal create --summary %q --start %q --duration %s --calendar %s --tz %s",
 		*summary, *start, *duration, *calendarID, *tz)
+	rerun = withOptionalFlag(rerun, "location", *location)
+	rerun = withOptionalFlag(rerun, "attendees", *attendees)
+	rerun = withOptionalFlag(rerun, "rrule", *rruleFlag)
+	rerun = withOptionalFlag(rerun, "idempotency-key", *idempotencyKey)
+	rerun += " --confirm"
 	proceed, code := writeGate("cal", "DOCKET_CAL_READONLY", *confirm, *dryRun, plan, rerun)
 	if !proceed {
 		return code
@@ -778,7 +808,7 @@ func cmdCalCreate(ctx context.Context, args []string) int {
 }
 
 func cmdCalUpdate(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("cal update", flag.ContinueOnError)
+	fs := newFlagSet("cal update")
 	id := fs.String("id", "", "event id, from `cal agenda` output")
 	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
@@ -840,7 +870,12 @@ func cmdCalUpdate(ctx context.Context, args []string) int {
 		return out.Fail(out.ExitNotFound, "EVENT_NOT_FOUND", err.Error(), false)
 	}
 
-	rerun := fmt.Sprintf("docket cal update --id %s --calendar %s --tz %s ... --confirm", *id, *calendarID, *tz)
+	rerun := fmt.Sprintf("docket cal update --id %s --calendar %s --tz %s", *id, *calendarID, *tz)
+	rerun = withOptionalFlag(rerun, "summary", *summary)
+	rerun = withOptionalFlag(rerun, "location", *location)
+	rerun = withOptionalFlag(rerun, "start", *start)
+	rerun = withOptionalFlag(rerun, "duration", *duration)
+	rerun += " --confirm"
 	proceed, code := writeGate("cal", "DOCKET_CAL_READONLY", *confirm, *dryRun, plan, rerun)
 	if !proceed {
 		return code
@@ -854,7 +889,7 @@ func cmdCalUpdate(ctx context.Context, args []string) int {
 }
 
 func cmdCalDelete(ctx context.Context, args []string) int {
-	fs := flag.NewFlagSet("cal delete", flag.ContinueOnError)
+	fs := newFlagSet("cal delete")
 	id := fs.String("id", "", "event id, from `cal agenda` output")
 	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")

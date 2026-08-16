@@ -29,6 +29,20 @@ and any lint/build tooling so the dev environment is reproducible across machine
    teaching moment for the model's next tool call, since there's no human in the loop to
    infer intent from a terse message.
 
+Two bugs an audit of every command's usage/error string caught, both fixed:
+- Go's `flag` package prints its own "flag provided but not defined" + per-flag usage text
+  straight to stderr on every parse error, unprompted — noise duplicating (in a different,
+  inconsistent format) what the JSON envelope already says. Suppressed via `fs.SetOutput
+  (io.Discard)` on every `FlagSet` (see `newFlagSet` in `cmd/docket/main.go`) — the JSON
+  envelope must be the *only* thing docket emits, on stdout or stderr.
+- Two `--confirm` "re-run exactly as shown" hints didn't actually reproduce the invocation
+  being previewed: `cal update`'s literally contained a `"..."` placeholder instead of the
+  real flags (not valid shell syntax at all), and `cal create`'s silently dropped
+  `--location`/`--attendees`/`--rrule`/`--idempotency-key` even when the agent had passed
+  them — copying either verbatim would have created a different event than the one just
+  previewed. A missing flag in a rerun hint is a correctness bug, not a cosmetic one:
+  the whole point of showing it is that copying it verbatim reproduces the preview exactly.
+
 ---
 
 ## 2. Layout
