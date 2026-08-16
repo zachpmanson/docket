@@ -1,0 +1,16 @@
+[provider]
+# Values pinned from searchfox.org/comm-central/source/mailnews/base/src/OAuth2Providers.sys.mjs
+# Verify use_pkce and redirect_uri against current source if login ever breaks.
+# These are Mozilla Thunderbird's borrowed OAuth client — not a secret Zach controls, already
+# public in Mozilla's own source. See docket-design.md §3 and §8 for the tradeoffs.
+client_id     = "406964657835-aq8lmia8j95dhl1a2bvharmfk3t1hgqj.apps.googleusercontent.com"
+client_secret = "kSmqreRr0qwBWJgbf5Y-PjSU"
+auth_url      = "https://accounts.google.com/o/oauth2/auth"
+token_url     = "https://www.googleapis.com/oauth2/v3/token"
+redirect_uri  = "http://localhost"
+use_pkce      = true
+scopes = [
+  "https://mail.google.com/",
+  "https://www.googleapis.com/auth/calendar",
+  "email",
+]
