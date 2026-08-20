@@ -148,7 +148,7 @@ func (p *LabelPlan) Execute(ctx context.Context, svc *gmail.Service, labels *Lab
 func fetchEnvelope(ctx context.Context, svc *gmail.Service, labels *LabelCache, id string) (*Envelope, error) {
 	msg, err := svc.Users.Messages.Get(meUser, id).
 		Format("metadata").
-		MetadataHeaders("From", "To", "Subject", "Date").
+		MetadataHeaders(metadataHeaders...).
 		Context(ctx).Do()
 	if err != nil {
 		return nil, fmt.Errorf("fetching message %q after write: %w", id, err)

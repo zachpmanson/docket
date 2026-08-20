@@ -52,7 +52,7 @@ func Read(ctx context.Context, svc *gmail.Service, labels *LabelCache, id string
 // agent calls Read on a specific message id if it needs that message's body.
 func GetThread(ctx context.Context, svc *gmail.Service, labels *LabelCache, threadID string) (*Thread, error) {
 	t, err := svc.Users.Threads.Get(meUser, threadID).Format("metadata").
-		MetadataHeaders("From", "To", "Subject", "Date").Context(ctx).Do()
+		MetadataHeaders(metadataHeaders...).Context(ctx).Do()
 	if err != nil {
 		return nil, fmt.Errorf(
 			"fetching thread %q: %w (thread ids come from an Envelope's thread_id field, "+
