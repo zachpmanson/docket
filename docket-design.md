@@ -216,8 +216,16 @@ docket mail label   --id <gm-msgid> --add Foo --remove INBOX [--confirm]
 
 ### Output shape for agents
 
-`search` and `list` return envelopes only — id, thread id, from, to, subject, date, labels,
-snippet. Bodies are expensive and blow the context window; make the agent ask for them.
+`search` and `list` return envelopes only — id, thread id, from, to, cc, subject, date, labels, snippet,
+plus the threading headers (`message_id`, `in_reply_to`, `references`) needed to reconstruct reply
+edges without inferring them from quoted bodies. Bodies are expensive and blow the context window;
+make the agent ask for them. (The envelope package has an internal namesake; these are the
+`mail.Envelope` fields — see `internal/mail/types.go`.)
+
+The threading/cc fields are always present in JSON output (the agent-facing form), but hidden from
+the human-readable terminal table by default — pass `--all` on `search`/`list`/`read`/`thread`/
+`send`/`reply`/`label` to show them. Fields gated this way carry a `verbose:"…"` struct tag read by
+the table renderer.
 
 `read` prefers `text/plain`, falls back to HTML converted to text, truncates at `--max-bytes`
 with an explicit `"truncated": true` field so the agent knows it didn't see everything.

@@ -63,7 +63,7 @@ func List(ctx context.Context, svc *gmail.Service, labels *LabelCache, opts List
 
 			msg, err := svc.Users.Messages.Get(meUser, id).
 				Format("metadata").
-				MetadataHeaders("From", "To", "Subject", "Date").
+				MetadataHeaders(metadataHeaders...).
 				Context(ctx).Do()
 			if err != nil {
 				errs[i] = fmt.Errorf("fetching message %s: %w", id, err)

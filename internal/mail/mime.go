@@ -8,6 +8,14 @@ import (
 	"google.golang.org/api/gmail/v1"
 )
 
+// metadataHeaders is the set of headers requested for envelope-only fetches
+// (Format("metadata")). It must cover every field envelopeFromMessage reads
+// when the caller uses metadata format rather than "full".
+var metadataHeaders = []string{
+	"From", "To", "Cc", "Subject", "Date",
+	"Message-ID", "In-Reply-To", "References",
+}
+
 func header(headers []*gmail.MessagePartHeader, name string) string {
 	for _, h := range headers {
 		if strings.EqualFold(h.Name, name) {
@@ -17,20 +25,42 @@ func header(headers []*gmail.MessagePartHeader, name string) string {
 	return ""
 }
 
+// headerValues returns the whitespace-split values of every header with the
+// given name. Used for References, whose value is a whitespace-separated list
+// of RFC822 Message-IDs (possibly folded across multiple physical lines).
+func headerValues(headers []*gmail.MessagePartHeader, name string) []string {
+	var vals []string
+	for _, h := range headers {
+		if !strings.EqualFold(h.Name, name) {
+			continue
+		}
+		for _, part := range strings.Fields(h.Value) {
+			if part != "" {
+				vals = append(vals, part)
+			}
+		}
+	}
+	return vals
+}
+
 func envelopeFromMessage(msg *gmail.Message, labels *LabelCache) Envelope {
 	var headers []*gmail.MessagePartHeader
 	if msg.Payload != nil {
 		headers = msg.Payload.Headers
 	}
 	return Envelope{
-		ID:       msg.Id,
-		ThreadID: msg.ThreadId,
-		From:     header(headers, "From"),
-		To:       header(headers, "To"),
-		Subject:  header(headers, "Subject"),
-		Date:     header(headers, "Date"),
-		Labels:   labels.Names(msg.LabelIds),
-		Snippet:  msg.Snippet,
+		ID:         msg.Id,
+		ThreadID:   msg.ThreadId,
+		From:       header(headers, "From"),
+		To:         header(headers, "To"),
+		Cc:         header(headers, "Cc"),
+		Subject:    header(headers, "Subject"),
+		Date:       header(headers, "Date"),
+		MessageID:  header(headers, "Message-ID"),
+		InReplyTo:  header(headers, "In-Reply-To"),
+		References: headerValues(headers, "References"),
+		Labels:     labels.Names(msg.LabelIds),
+		Snippet:    msg.Snippet,
 	}
 }
 

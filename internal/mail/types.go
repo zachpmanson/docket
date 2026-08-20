@@ -4,14 +4,18 @@ package mail
 // only. Bodies are expensive and blow the context window, so the agent must
 // call Read explicitly to get one. See docket-design.md §4.
 type Envelope struct {
-	ID       string   `json:"id"`
-	ThreadID string   `json:"thread_id"`
-	From     string   `json:"from"`
-	To       string   `json:"to"`
-	Subject  string   `json:"subject"`
-	Date     string   `json:"date"`
-	Labels   []string `json:"labels"`
-	Snippet  string   `json:"snippet"`
+	ID         string   `json:"id"`
+	ThreadID   string   `json:"thread_id"`
+	From       string   `json:"from"`
+	To         string   `json:"to"`
+	Cc         string   `json:"cc,omitempty" verbose:"threading"`
+	Subject    string   `json:"subject"`
+	Date       string   `json:"date"`
+	MessageID  string   `json:"message_id,omitempty" verbose:"threading"`
+	InReplyTo  string   `json:"in_reply_to,omitempty" verbose:"threading"`
+	References []string `json:"references,omitempty" verbose:"threading"`
+	Labels     []string `json:"labels"`
+	Snippet    string   `json:"snippet"`
 }
 
 // Attachment is metadata only; fetching bytes is a separate, explicit call

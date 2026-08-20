@@ -15,7 +15,7 @@ import (
 // non-TTY caller would get, just formatted for a terminal instead of an
 // agent: a slice of structs becomes a column table, a single struct or map
 // becomes a "field: value" listing, anything else is printed as-is.
-func writeTable(w io.Writer, data any) {
+func writeTable(w io.Writer, data any, verbose bool) {
 	if data == nil {
 		fmt.Fprintln(w, "(no data)")
 		return
@@ -32,9 +32,9 @@ func writeTable(w io.Writer, data any) {
 
 	switch v.Kind() {
 	case reflect.Slice, reflect.Array:
-		writeSlice(w, v)
+		writeSlice(w, v, verbose)
 	case reflect.Struct:
-		writeKV(w, structFields(v))
+		writeKV(w, structFields(v, verbose))
 	case reflect.Map:
 		writeKV(w, mapFields(v))
 	default:
@@ -42,7 +42,7 @@ func writeTable(w io.Writer, data any) {
 	}
 }
 
-func writeSlice(w io.Writer, v reflect.Value) {
+func writeSlice(w io.Writer, v reflect.Value, verbose bool) {
 	if v.Len() == 0 {
 		fmt.Fprintln(w, "(no results)")
 		return
@@ -60,7 +60,7 @@ func writeSlice(w io.Writer, v reflect.Value) {
 		return
 	}
 
-	headers := fieldNames(elem.Type())
+	headers := fieldNames(elem.Type(), verbose)
 
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(tw, strings.ToUpper(strings.Join(headers, "\t")))
@@ -69,7 +69,7 @@ func writeSlice(w io.Writer, v reflect.Value) {
 		for row.Kind() == reflect.Ptr {
 			row = row.Elem()
 		}
-		fmt.Fprintln(tw, strings.Join(rowCells(row, headers), "\t"))
+		fmt.Fprintln(tw, strings.Join(rowCells(row, headers, verbose), "\t"))
 	}
 	tw.Flush()
 }
@@ -79,13 +79,13 @@ type kv struct {
 	value string
 }
 
-func structFields(v reflect.Value) []kv {
+func structFields(v reflect.Value, verbose bool) []kv {
 	t := v.Type()
 	var out []kv
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
 		name, skip := jsonFieldName(f)
-		if skip {
+		if skip || (isVerboseField(f) && !verbose) {
 			continue
 		}
 		// Anonymous embedded structs with no explicit json tag are promoted
@@ -97,7 +97,7 @@ func structFields(v reflect.Value) []kv {
 				fv = fv.Elem()
 			}
 			if fv.Kind() == reflect.Struct {
-				out = append(out, structFields(fv)...)
+				out = append(out, structFields(fv, verbose)...)
 				continue
 			}
 		}
@@ -106,8 +106,8 @@ func structFields(v reflect.Value) []kv {
 	return out
 }
 
-func rowCells(v reflect.Value, headers []string) []string {
-	fields := structFields(v)
+func rowCells(v reflect.Value, headers []string, verbose bool) []string {
+	fields := structFields(v, verbose)
 	byName := make(map[string]string, len(fields))
 	for _, f := range fields {
 		byName[f.name] = f.value
@@ -119,12 +119,12 @@ func rowCells(v reflect.Value, headers []string) []string {
 	return cells
 }
 
-func fieldNames(t reflect.Type) []string {
+func fieldNames(t reflect.Type, verbose bool) []string {
 	var names []string
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
 		name, skip := jsonFieldName(f)
-		if skip {
+		if skip || (isVerboseField(f) && !verbose) {
 			continue
 		}
 		if f.Anonymous && f.Tag.Get("json") == "" {
@@ -133,13 +133,21 @@ func fieldNames(t reflect.Type) []string {
 				ft = ft.Elem()
 			}
 			if ft.Kind() == reflect.Struct {
-				names = append(names, fieldNames(ft)...)
+				names = append(names, fieldNames(ft, verbose)...)
 				continue
 			}
 		}
 		names = append(names, name)
 	}
 	return names
+}
+
+// isVerboseField reports whether a struct field carries a `verbose:"…"` tag.
+// Such fields are included in table/key-value terminal output only when the
+// caller opted into verbose rendering (EmitVerbose / --all); JSON output
+// always includes them.
+func isVerboseField(f reflect.StructField) bool {
+	return f.Tag.Get("verbose") != ""
 }
 
 // jsonFieldName mirrors encoding/json's tag rules closely enough for

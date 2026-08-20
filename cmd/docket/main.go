@@ -306,12 +306,13 @@ func cmdMailSearch(ctx context.Context, args []string) int {
 	fs := newFlagSet("mail search")
 	query := fs.String("query", "", "Gmail search query, e.g. \"from:emiel is:unread\"")
 	limit := fs.Int64("limit", 25, "max results to return")
+	all := fs.Bool("all", false, "include threading/cc headers in terminal output")
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket mail search --query \"...\" [--limit 25]")
+		return usageError(err.Error(), "docket mail search --query \"...\" [--limit 25] [--all]")
 	}
 	if *query == "" {
 		return usageError("--query is required and must not be empty",
-			"docket mail search --query \"from:emiel is:unread\" [--limit 25]")
+			"docket mail search --query \"from:emiel is:unread\" [--limit 25] [--all]")
 	}
 
 	svc, labels, code := mailContext(ctx)
@@ -323,6 +324,9 @@ func cmdMailSearch(ctx context.Context, args []string) int {
 	if err != nil {
 		return out.Fail(out.ExitError, "GMAIL_API_ERROR", err.Error(), true)
 	}
+	if *all {
+		return out.EmitVerbose(envelopes)
+	}
 	return out.Emit(envelopes)
 }
 
@@ -331,8 +335,9 @@ func cmdMailList(ctx context.Context, args []string) int {
 	label := fs.String("label", "INBOX", "label name to list, e.g. INBOX")
 	limit := fs.Int64("limit", 25, "max results to return")
 	unread := fs.Bool("unread", false, "only unread messages")
+	all := fs.Bool("all", false, "include threading/cc headers in terminal output")
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket mail list --label INBOX [--limit 25] [--unread]")
+		return usageError(err.Error(), "docket mail list --label INBOX [--limit 25] [--unread] [--all]")
 	}
 
 	svc, labels, code := mailContext(ctx)
@@ -358,6 +363,9 @@ func cmdMailList(ctx context.Context, args []string) int {
 	if err != nil {
 		return out.Fail(out.ExitError, "GMAIL_API_ERROR", err.Error(), true)
 	}
+	if *all {
+		return out.EmitVerbose(envelopes)
+	}
 	return out.Emit(envelopes)
 }
 
@@ -365,12 +373,13 @@ func cmdMailRead(ctx context.Context, args []string) int {
 	fs := newFlagSet("mail read")
 	id := fs.String("id", "", "Gmail message id, from a search/list/thread result")
 	maxBytes := fs.Int("max-bytes", 20000, "truncate body at this many bytes")
+	all := fs.Bool("all", false, "include threading/cc headers in terminal output")
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket mail read --id <gm-id> [--max-bytes 20000]")
+		return usageError(err.Error(), "docket mail read --id <gm-id> [--max-bytes 20000] [--all]")
 	}
 	if *id == "" {
 		return usageError("--id is required and must not be empty",
-			"docket mail read --id <gm-id> [--max-bytes 20000]; ids come from "+
+			"docket mail read --id <gm-id> [--max-bytes 20000] [--all]; ids come from "+
 				"`mail search`/`mail list` output, not from a subject line or index")
 	}
 
@@ -383,18 +392,22 @@ func cmdMailRead(ctx context.Context, args []string) int {
 	if err != nil {
 		return out.Fail(out.ExitNotFound, "MESSAGE_NOT_FOUND", err.Error(), false)
 	}
+	if *all {
+		return out.EmitVerbose(msg)
+	}
 	return out.Emit(msg)
 }
 
 func cmdMailThread(ctx context.Context, args []string) int {
 	fs := newFlagSet("mail thread")
 	id := fs.String("id", "", "Gmail thread id, from a search/list/read result's thread_id")
+	all := fs.Bool("all", false, "include threading/cc headers in terminal output")
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket mail thread --id <gm-thread-id>")
+		return usageError(err.Error(), "docket mail thread --id <gm-thread-id> [--all]")
 	}
 	if *id == "" {
 		return usageError("--id is required and must not be empty",
-			"docket mail thread --id <gm-thread-id>; thread ids come from an "+
+			"docket mail thread --id <gm-thread-id> [--all]; thread ids come from an "+
 				"Envelope's thread_id field, not the message id")
 	}
 
@@ -407,6 +420,9 @@ func cmdMailThread(ctx context.Context, args []string) int {
 	if err != nil {
 		return out.Fail(out.ExitNotFound, "THREAD_NOT_FOUND", err.Error(), false)
 	}
+	if *all {
+		return out.EmitVerbose(thread)
+	}
 	return out.Emit(thread)
 }
 
@@ -417,12 +433,13 @@ func cmdMailSend(ctx context.Context, args []string) int {
 	bodyFile := fs.String("body-file", "", "path to plain-text body, or - for stdin")
 	confirm := fs.Bool("confirm", false, "actually send (required)")
 	dryRun := fs.Bool("dry-run", false, "preview without sending")
+	all := fs.Bool("all", false, "include threading/cc headers in terminal output")
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket mail send --to ... --subject ... --body-file - [--confirm]")
+		return usageError(err.Error(), "docket mail send --to ... --subject ... --body-file - [--confirm] [--all]")
 	}
 	if *to == "" || *subject == "" || *bodyFile == "" {
 		return usageError("--to, --subject, and --body-file are all required",
-			"docket mail send --to ... --subject ... --body-file - [--confirm]")
+			"docket mail send --to ... --subject ... --body-file - [--confirm] [--all]")
 	}
 	body, err := readBodyFile(*bodyFile)
 	if err != nil {
@@ -449,6 +466,9 @@ func cmdMailSend(ctx context.Context, args []string) int {
 	if err != nil {
 		return out.Fail(out.ExitError, "SEND_FAILED", err.Error(), true)
 	}
+	if *all {
+		return out.EmitVerbose(env)
+	}
 	return out.Emit(env)
 }
 
@@ -458,12 +478,13 @@ func cmdMailReply(ctx context.Context, args []string) int {
 	bodyFile := fs.String("body-file", "", "path to plain-text body, or - for stdin")
 	confirm := fs.Bool("confirm", false, "actually send (required)")
 	dryRun := fs.Bool("dry-run", false, "preview without sending")
+	all := fs.Bool("all", false, "include threading/cc headers in terminal output")
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket mail reply --id <gm-id> --body-file - [--confirm]")
+		return usageError(err.Error(), "docket mail reply --id <gm-id> --body-file - [--confirm] [--all]")
 	}
 	if *id == "" || *bodyFile == "" {
 		return usageError("--id and --body-file are both required",
-			"docket mail reply --id <gm-id> --body-file - [--confirm]")
+			"docket mail reply --id <gm-id> --body-file - [--confirm] [--all]")
 	}
 	body, err := readBodyFile(*bodyFile)
 	if err != nil {
@@ -490,6 +511,9 @@ func cmdMailReply(ctx context.Context, args []string) int {
 	if err != nil {
 		return out.Fail(out.ExitError, "SEND_FAILED", err.Error(), true)
 	}
+	if *all {
+		return out.EmitVerbose(env)
+	}
 	return out.Emit(env)
 }
 
@@ -500,12 +524,13 @@ func cmdMailLabel(ctx context.Context, args []string) int {
 	remove := fs.String("remove", "", "comma-separated label names to remove")
 	confirm := fs.Bool("confirm", false, "actually apply the change (required)")
 	dryRun := fs.Bool("dry-run", false, "preview without applying")
+	all := fs.Bool("all", false, "include threading/cc headers in terminal output")
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket mail label --id <gm-id> --add Foo --remove INBOX [--confirm]")
+		return usageError(err.Error(), "docket mail label --id <gm-id> --add Foo --remove INBOX [--confirm] [--all]")
 	}
 	if *id == "" {
 		return usageError("--id is required and must not be empty",
-			"docket mail label --id <gm-id> --add Foo --remove INBOX [--confirm]")
+			"docket mail label --id <gm-id> --add Foo --remove INBOX [--confirm] [--all]")
 	}
 	addNames := splitCommaList(*add)
 	removeNames := splitCommaList(*remove)
@@ -534,6 +559,9 @@ func cmdMailLabel(ctx context.Context, args []string) int {
 	env, err := plan.Execute(ctx, svc, labels)
 	if err != nil {
 		return out.Fail(out.ExitError, "LABEL_FAILED", err.Error(), true)
+	}
+	if *all {
+		return out.EmitVerbose(env)
 	}
 	return out.Emit(env)
 }

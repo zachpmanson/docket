@@ -46,11 +46,25 @@ func IsTTY() bool {
 // code: JSON when stdout isn't a TTY, a human-readable table when it is.
 // See docket-design.md §1 principle 1.
 func Emit(data any, warnings ...string) int {
+	return EmitOptions(data, false, warnings...)
+}
+
+// EmitVerbose is Emit with the human-readable table/key-value output forced
+// to include verbose fields (struct fields tagged `verbose:"…"`). JSON
+// output is unaffected — verbosity only gates the terminal rendering, so an
+// agent piping to JSON always sees every field. Commands expose this as an
+// --all flag.
+func EmitVerbose(data any, warnings ...string) int {
+	return EmitOptions(data, true, warnings...)
+}
+
+// EmitOptions is the shared core of Emit/EmitVerbose.
+func EmitOptions(data any, verbose bool, warnings ...string) int {
 	if IsTTY() {
 		for _, w := range warnings {
 			fmt.Fprintln(os.Stdout, "Warning:", w)
 		}
-		writeTable(os.Stdout, data)
+		writeTable(os.Stdout, data, verbose)
 		return ExitOK
 	}
 	env := Envelope{OK: true, Data: data, Warnings: warnings}
