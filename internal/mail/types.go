@@ -8,12 +8,12 @@ type Envelope struct {
 	ThreadID   string   `json:"thread_id"`
 	From       string   `json:"from"`
 	To         string   `json:"to"`
-	Cc         string   `json:"cc,omitempty"`
+	Cc         string   `json:"cc,omitempty" verbose:"threading"`
 	Subject    string   `json:"subject"`
 	Date       string   `json:"date"`
-	MessageID  string   `json:"message_id,omitempty"`
-	InReplyTo  string   `json:"in_reply_to,omitempty"`
-	References []string `json:"references,omitempty"`
+	MessageID  string   `json:"message_id,omitempty" verbose:"threading"`
+	InReplyTo  string   `json:"in_reply_to,omitempty" verbose:"threading"`
+	References []string `json:"references,omitempty" verbose:"threading"`
 	Labels     []string `json:"labels"`
 	Snippet    string   `json:"snippet"`
 }

@@ -222,6 +222,11 @@ edges without inferring them from quoted bodies. Bodies are expensive and blow t
 make the agent ask for them. (The envelope package has an internal namesake; these are the
 `mail.Envelope` fields — see `internal/mail/types.go`.)
 
+The threading/cc fields are always present in JSON output (the agent-facing form), but hidden from
+the human-readable terminal table by default — pass `--all` on `search`/`list`/`read`/`thread`/
+`send`/`reply`/`label` to show them. Fields gated this way carry a `verbose:"…"` struct tag read by
+the table renderer.
+
 `read` prefers `text/plain`, falls back to HTML converted to text, truncates at `--max-bytes`
 with an explicit `"truncated": true` field so the agent knows it didn't see everything.
 Attachments are listed as metadata (filename, mime type, size, part id) and fetched only via
