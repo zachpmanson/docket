@@ -31,6 +31,13 @@ type fakeGmail struct {
 
 	// bodies keyed by message id, returned by messages.get for format=full.
 	bodies map[string]string
+
+	// payloads keyed by message id, for the multipart shapes a single
+	// text/plain body cannot express. Takes precedence over bodies.
+	payloads map[string]*gmail.MessagePart
+
+	// threads keyed by thread id, listing the message ids in the thread.
+	threads map[string][]string
 }
 
 type listPage struct {
@@ -40,7 +47,12 @@ type listPage struct {
 
 func newFakeGmail(t *testing.T, pages map[string]listPage) *fakeGmail {
 	t.Helper()
-	f := &fakeGmail{pages: pages, bodies: map[string]string{}}
+	f := &fakeGmail{
+		pages:    pages,
+		bodies:   map[string]string{},
+		payloads: map[string]*gmail.MessagePart{},
+		threads:  map[string][]string{},
+	}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/gmail/v1/users/me/messages", func(w http.ResponseWriter, r *http.Request) {
@@ -59,12 +71,33 @@ func newFakeGmail(t *testing.T, pages map[string]listPage) *fakeGmail {
 
 	mux.HandleFunc("/gmail/v1/users/me/messages/", func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimPrefix(r.URL.Path, "/gmail/v1/users/me/messages/")
-		body, ok := f.bodies[id]
+		msg, ok := f.message(id)
 		if !ok && r.URL.Query().Get("format") == "full" {
 			http.Error(w, `{"error":{"code":404,"message":"not found"}}`, http.StatusNotFound)
 			return
 		}
-		writeJSON(t, w, message(id, body))
+		writeJSON(t, w, msg)
+	})
+
+	mux.HandleFunc("/gmail/v1/users/me/threads/", func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/gmail/v1/users/me/threads/")
+		ids, ok := f.threads[id]
+		if !ok {
+			http.Error(w, `{"error":{"code":404,"message":"not found"}}`, http.StatusNotFound)
+			return
+		}
+		resp := gmail.Thread{Id: id}
+		for _, mid := range ids {
+			msg, _ := f.message(mid)
+			// Gmail returns payload bodies only for format=full; a metadata
+			// fetch that leaked them would hide a command asking for the
+			// wrong format.
+			if r.URL.Query().Get("format") != "full" {
+				msg.Payload = &gmail.MessagePart{Headers: msg.Payload.Headers}
+			}
+			resp.Messages = append(resp.Messages, &msg)
+		}
+		writeJSON(t, w, resp)
 	})
 
 	f.server = httptest.NewServer(mux)
@@ -83,6 +116,19 @@ func (f *fakeGmail) service(t *testing.T) *gmail.Service {
 	return svc
 }
 
+// message builds the messages.get response for one id, from an explicit
+// payload when the test set one and from a single text/plain body otherwise.
+func (f *fakeGmail) message(id string) (gmail.Message, bool) {
+	if payload, ok := f.payloads[id]; ok {
+		msg := message(id, "")
+		msg.Payload = payload
+		msg.Payload.Headers = headers(id)
+		return msg, true
+	}
+	body, ok := f.bodies[id]
+	return message(id, body), ok
+}
+
 // message builds a plausible messages.get response. Every value is invented:
 // no real address, subject or body belongs in a fixture.
 func message(id, body string) gmail.Message {
@@ -93,18 +139,26 @@ func message(id, body string) gmail.Message {
 		Snippet:  "snippet for " + id,
 		Payload: &gmail.MessagePart{
 			MimeType: "text/plain",
-			Headers: []*gmail.MessagePartHeader{
-				{Name: "From", Value: "Dana Okafor <dana@example.com>"},
-				{Name: "To", Value: "ops@example.org"},
-				{Name: "Subject", Value: "Re: quarterly widget audit"},
-				{Name: "Date", Value: "Mon, 03 Aug 2026 09:14:00 +1000"},
-				{Name: "Message-ID", Value: "<" + id + "@mail.example.com>"},
-			},
-			Body: &gmail.MessagePartBody{
-				Size: int64(len(body)),
-				Data: base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(body)),
-			},
+			Headers:  headers(id),
+			Body:     partBody(body),
 		},
+	}
+}
+
+func headers(id string) []*gmail.MessagePartHeader {
+	return []*gmail.MessagePartHeader{
+		{Name: "From", Value: "Dana Okafor <dana@example.com>"},
+		{Name: "To", Value: "ops@example.org"},
+		{Name: "Subject", Value: "Re: quarterly widget audit"},
+		{Name: "Date", Value: "Mon, 03 Aug 2026 09:14:00 +1000"},
+		{Name: "Message-ID", Value: "<" + id + "@mail.example.com>"},
+	}
+}
+
+func partBody(data string) *gmail.MessagePartBody {
+	return &gmail.MessagePartBody{
+		Size: int64(len(data)),
+		Data: base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte(data)),
 	}
 }
 

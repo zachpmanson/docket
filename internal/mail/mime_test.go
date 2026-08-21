@@ -56,7 +56,7 @@ func TestHTMLToTextDropsScriptAndStyleContent(t *testing.T) {
 func TestPlainPartKeepsLiteralEntityText(t *testing.T) {
 	body := "In HTML an ampersand is written &amp; and a space is &nbsp;.\nThe URL ends in ?a=1&amp;b=2\n"
 
-	msg, err := readFixture(t, body, DefaultMaxBytes)
+	msg, err := readFixture(t, body, ReadOptions{MaxBytes: DefaultMaxBytes})
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
