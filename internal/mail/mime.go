@@ -2,6 +2,7 @@ package mail
 
 import (
 	"encoding/base64"
+	"html"
 	"regexp"
 	"strings"
 
@@ -76,11 +77,31 @@ func decodeBase64URL(data string) string {
 	return string(b)
 }
 
+// scriptStyleRE matches a <script> or <style> element together with its
+// content. Stripping only the tags would leave the CSS or JS between them
+// in the plain-text body, and in HTML-only marketing mail that payload is
+// routinely larger than the prose it surrounds.
+var scriptStyleRE = regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script\s*>|<style\b[^>]*>.*?</style\s*>`)
+
 var htmlTagRE = regexp.MustCompile(`(?s)<[^>]*>`)
 
-func htmlToText(html string) string {
-	text := htmlTagRE.ReplaceAllString(html, "")
-	return strings.TrimSpace(text)
+// htmlToText renders a text/html part as the plain-text body, for a message
+// that carries no text/plain part of its own.
+//
+// Character references are resolved here and nowhere else. A caller cannot
+// do it afterwards: a body that legitimately contains the literal text
+// "&amp;" — a plain-text part quoting HTML source, or a URL a sender typed
+// by hand — must survive untouched, and only this path knows that what it
+// holds is markup. A blanket unescape applied to the body field would
+// corrupt exactly those messages.
+//
+// The order is load-bearing. Tags are stripped first, references second:
+// unescaping first would turn a source "&lt;div&gt;" into "<div>", which the
+// tag strip would then delete, silently removing text the message displayed.
+func htmlToText(markup string) string {
+	text := scriptStyleRE.ReplaceAllString(markup, "")
+	text = htmlTagRE.ReplaceAllString(text, "")
+	return strings.TrimSpace(html.UnescapeString(text))
 }
 
 // findBody walks the MIME part tree preferring text/plain, falling back to
