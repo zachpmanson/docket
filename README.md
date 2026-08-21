@@ -100,6 +100,7 @@ Verify with `docket auth whoami`.
 | `mail list --label INBOX [--unread]` | List messages in a label |
 | `mail read --id <gm-msgid>` | Full body; prefers `text/plain`, truncates at `--max-bytes` (`0` = no cap); `--html` adds the raw `text/html` part |
 | `mail thread --id <gm-thrid>` | Read a whole conversation (envelopes only unless `--html`) |
+| `mail attachment --id <gm-msgid> --part <part-id> --out <path>` | Write one attachment's bytes to a file |
 | `mail send --to ... --subject ... --body-file -` | Send (mutating: `--confirm`) |
 | `mail reply --id <gm-msgid> --body-file -` | Reply (mutating: `--confirm`) |
 | `mail label --id <gm-msgid> --add Foo --remove INBOX` | Apply/remove labels (mutating: `--confirm`) |
@@ -130,9 +131,9 @@ Notes:
   representations of the same message. Nesting does not change the choice — a
   `multipart/mixed` wrapping an alternative resolves to the same pair. In a
   `multipart/related`, the html part is returned and the `image/*` parts it references are
-  not: inline images appear under `attachments` when they carry a filename, and the `cid:`
-  URLs in the markup that point at them do not resolve to anything docket hands back.
-  A message with only a `text/html` part still gets a `body`, its markup rendered as text.
+  not: inline images appear under `attachments` when they carry a filename, and a `cid:` URL
+  in the markup is resolved by matching it to that entry's `content_id` and fetching the part
+  with `mail attachment`. A message with only a `text/html` part still gets a `body`, its markup rendered as text.
 - `--html` on `thread` returns every message's `body` and `body_html` rather than envelopes
   alone, from the same single API call, and honours `--max-bytes` per body. It is opt-in
   because a conversation's worth of bodies is the largest response docket produces. The
@@ -145,6 +146,41 @@ Notes:
   last complete tag and character reference, so it parses — a cut left mid-tag does not, a
   parser swallows the remainder of the document into an attribute value. Elements left
   unclosed are fine; every html parser closes those implicitly.
+- `mail attachment` writes the bytes to `--out` and returns the path, size,
+  mime type, filename and a sha256 of the content in the envelope. The bytes do not go to
+  stdout: stdout carries the JSON envelope, and a caller that has to locate the envelope
+  inside a stream of PNG bytes cannot read a failure at all — which is the one thing it must
+  never lose. Nothing is resized, re-encoded or sniffed; the file holds what the sender sent.
+- One part per invocation. Gmail has no batch attachments endpoint, so several parts in one
+  call would save a subprocess spawn and not one round trip, and the result would need a
+  per-part shape that the envelope's single `ok` cannot express — a call where three of five
+  parts are gone is neither a success nor a failure.
+- The destination directory must already exist; docket does not create it, because a typo'd
+  path silently growing a directory tree is worse than a failed fetch. The write goes through
+  a temporary file and a rename, mode `0600`, so an interrupted fetch leaves no short file
+  for a later pass to mistake for a complete one, and a corpus of private mail is not left
+  world-readable by whatever umask happened to be in force. An existing file at `--out` is
+  overwritten: a resumed backfill re-fetches what it already has.
+- `--max-bytes` on `attachment` means the same as everywhere else, `0` included, and defaults
+  to 10 MB. Over the cap is `ATTACHMENT_TOO_LARGE`, not a truncated file — half a PNG is not
+  a smaller PNG, and once written to disk it is indistinguishable from a whole one. The cap
+  is checked against the size in the message metadata *before* the content call, so an
+  oversized attachment costs one cheap request rather than a download; it is checked again
+  against the bytes received, because the metadata size is Gmail's claim and not a
+  measurement. `mail read` reports every attachment's `size`, so a caller can skip one
+  without asking for it at all; the cap is there for the accident.
+- The four ways a fetch can come back empty stay four codes, because a caller walking
+  months-old metadata acts differently on each: `MESSAGE_NOT_FOUND` (exit 4, the message is
+  gone), `PART_NOT_FOUND` (exit 4, the message is there and has no such part — the error
+  names the part ids it does have), `ATTACHMENT_UNAVAILABLE` (exit 4, the part is there with
+  no content behind it), and `OUTPUT_WRITE_FAILED` (exit 1, the bytes arrived and the local
+  write failed — nothing about the mailbox is wrong). A rate limit stays `RATE_LIMITED`,
+  exit 5, `retryable: true`: reported as a missing part it would be recorded as a permanent
+  gap and never asked for again.
+- `attachments` entries carry `content_id` for the parts an html body references by
+  `cid:`, with the angle brackets stripped so it matches the URL token directly. Without it
+  a consumer holding `cid:ii-9f3c2a@mail.example.com` has no way to say which part id that
+  is, and an inline screenshot — content, not decoration — stays a broken image.
 - `--verbose` adds the threading/cc columns to the *terminal* table. JSON output always
   contains every field, so it does nothing for a programmatic caller. `--all` is a
   deprecated alias.

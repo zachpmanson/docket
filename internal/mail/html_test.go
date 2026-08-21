@@ -30,7 +30,39 @@ func inlineImagePart() *gmail.MessagePart {
 		MimeType: "image/png",
 		PartId:   "1.2",
 		Filename: "logo.png",
+		Headers:  []*gmail.MessagePartHeader{{Name: "Content-ID", Value: "<ii-9f3c2a@mail.example.com>"}},
 		Body:     &gmail.MessagePartBody{Size: 4096, AttachmentId: "att-1"},
+	}
+}
+
+// TestAttachmentsCarryTheContentIDAnHTMLBodyReferences pins the one field that
+// turns a cid: URL into something fetchable. A consumer holding
+// "cid:ii-9f3c2a@mail.example.com" cannot say which part that is without it,
+// and an inline screenshot — content, not decoration — stays a broken image.
+func TestAttachmentsCarryTheContentIDAnHTMLBodyReferences(t *testing.T) {
+	msg := readPayload(t, multipart("multipart/mixed",
+		multipart("multipart/related", htmlPart(htmlSource), inlineImagePart()),
+		&gmail.MessagePart{
+			MimeType: "application/pdf", PartId: "2", Filename: "quote.pdf",
+			Body: &gmail.MessagePartBody{Size: 9000, AttachmentId: "att-2"},
+		}), ReadOptions{MaxBytes: NoMaxBytes, IncludeHTML: true})
+
+	byPart := map[string]Attachment{}
+	for _, a := range msg.Attachments {
+		byPart[a.PartID] = a
+	}
+	inline, ok := byPart["1.2"]
+	if !ok {
+		t.Fatalf("the inline image is missing from the attachments list: %+v", msg.Attachments)
+	}
+	// Stripped of the angle brackets the header requires, because the cid: URL
+	// carries the bare token and every consumer trimming it itself is one
+	// consumer away from a broken image with no error anywhere.
+	if inline.ContentID != "ii-9f3c2a@mail.example.com" {
+		t.Errorf("content_id = %q, want the bare token a cid: URL carries", inline.ContentID)
+	}
+	if got := byPart["2"].ContentID; got != "" {
+		t.Errorf("a plain attachment reports content_id = %q, want it absent", got)
 	}
 }
 

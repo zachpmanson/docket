@@ -264,8 +264,8 @@ Part selection: the first `text/plain` part becomes `body` and the first `text/h
 becomes `body_html`, at any nesting depth. `multipart/alternative` yields both;
 `multipart/mixed` wrapping an alternative yields the same pair; `multipart/related` yields
 the html part and none of the `image/*` parts it references — inline images are listed under
-`attachments` when they carry a filename, and the markup's `cid:` URLs resolve to nothing
-docket returns.
+`attachments` when they carry a filename, and a `cid:` URL in the markup resolves through
+that entry's `content_id` to a part id `mail attachment` can fetch.
 
 Character references are resolved where html becomes text, not afterwards. A caller cannot
 do it: unescaping the `body` field would corrupt a `text/plain` part whose author wrote
@@ -281,8 +281,29 @@ recovering from it swallows everything after the cut into an attribute value.
 API call. Envelope-only stays the default because a conversation's worth of bodies is the
 largest response docket can produce.
 
-Attachments are listed as metadata (filename, mime type, size, part id) and fetched only via
-an explicit `mail attachment --part`.
+Attachments are listed as metadata (filename, mime type, size, part id, and `content_id` for
+the parts a `cid:` URL references) and fetched only via an explicit `mail attachment --part`.
+
+`mail attachment` writes the bytes to `--out` and returns the path, size, mime type,
+filename and sha256 in the envelope. Bytes never go to stdout, because stdout is where the
+envelope goes: a caller hunting for the JSON inside a stream of PNG bytes cannot read a
+failure, and a failure is the one thing it must not lose. Base64 in the envelope was the
+other option and costs a third more bytes to produce a form the caller decodes back to a
+file anyway.
+
+One part per call. There is no batch attachments endpoint, so several parts in one call would
+save a subprocess spawn and not a round trip, and a partial result has no honest value for a
+single `ok` field.
+
+`--max-bytes` keeps its meaning, `0` included. Over the cap is a refusal rather than a
+truncation — a half-written binary is corrupt in a way nothing downstream can detect — and it
+is checked against the metadata size before the content call, so refusing is cheap.
+
+A fetch that comes back with nothing reports which nothing it was: `MESSAGE_NOT_FOUND`,
+`PART_NOT_FOUND`, `ATTACHMENT_UNAVAILABLE`, or `OUTPUT_WRITE_FAILED`, with rate limits still
+`RATE_LIMITED`/exit 5/retryable. A consumer walking months-old metadata hits all of these as
+normal outcomes, and one code covering them would have it retry what is gone and abandon what
+is merely throttled.
 
 ---
 
