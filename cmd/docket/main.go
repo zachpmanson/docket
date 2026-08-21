@@ -297,22 +297,91 @@ func mailContext(ctx context.Context) (*gmail.Service, *mail.LabelCache, int) {
 	}
 	labels, err := mail.LoadLabels(ctx, svc)
 	if err != nil {
-		return nil, nil, out.Fail(out.ExitRateLimited, "GMAIL_API_ERROR", err.Error(), true)
+		return nil, nil, failMailAPI(err)
 	}
 	return svc, labels, out.ExitOK
 }
 
+// failMailAPI reports a Gmail API error with the cause classified, so a
+// caller can tell a rate limit it should wait out from a query it should fix
+// or a token a human must re-authorise. See mail.Classify for why an
+// unrecognised cause is not claimed to be retryable.
+func failMailAPI(err error) int {
+	f := mail.Classify(err)
+	return out.Fail(f.Exit, f.Code, err.Error(), f.Retryable)
+}
+
+// failMailLookup is failMailAPI for a command addressing one message or
+// thread, keeping that command's established "not found" code for a genuine
+// 404 while letting every other cause report itself. A rate-limited read
+// answering MESSAGE_NOT_FOUND, as it once did, tells a backfill the message is
+// gone and to stop asking.
+func failMailLookup(notFoundCode string, err error) int {
+	f := mail.Classify(err)
+	if f.Code == mail.CodeNotFound {
+		f.Code = notFoundCode
+	}
+	return out.Fail(f.Exit, f.Code, err.Error(), f.Retryable)
+}
+
+// verboseFlag registers --verbose and its deprecated --all alias, returning a
+// getter for the combined value. The flag adds columns to terminal output
+// only — JSON always carries every field — so it does nothing for a
+// programmatic caller. It was named --all, which sitting next to --limit
+// reads as "all results"; that is not, and never was, what it does.
+func verboseFlag(fs *flag.FlagSet) func() bool {
+	verbose := fs.Bool("verbose", false,
+		"show threading/cc headers in terminal output (JSON output always includes them)")
+	all := fs.Bool("all", false, "deprecated alias for --verbose")
+	return func() bool { return *verbose || *all }
+}
+
+// checkLimit rejects a --limit above mail.MaxLimit as a usage error. It is a
+// usage error rather than an API error because retrying the identical command
+// can never succeed, and retryable is what a client reads to decide whether
+// to back off and try again.
+func checkLimit(limit int64, correctUsage string) (code int, ok bool) {
+	if limit > mail.MaxLimit {
+		return usageError(
+			fmt.Sprintf("--limit %d exceeds the maximum of %d; request one page at a time and "+
+				"follow page.next_page_token to reach the rest", limit, mail.MaxLimit),
+			correctUsage), false
+	}
+	return out.ExitOK, true
+}
+
+// pageOf describes a page of results for the envelope. Gmail's next page
+// token is the only truncation signal available, so has_more follows it
+// directly: over-reporting one more page that turns out to be empty costs a
+// caller one call, whereas under-reporting loses results silently.
+func pageOf(result *mail.ListResult, limit int64) *out.Page {
+	return &out.Page{
+		Returned:      len(result.Envelopes),
+		Limit:         limit,
+		HasMore:       result.NextPageToken != "",
+		NextPageToken: result.NextPageToken,
+	}
+}
+
 func cmdMailSearch(ctx context.Context, args []string) int {
+	const usage = "docket mail search --query \"...\" [--limit 25, max 500] " +
+		"[--page-token <token>] [--verbose]"
+
 	fs := newFlagSet("mail search")
 	query := fs.String("query", "", "Gmail search query, e.g. \"from:emiel is:unread\"")
-	limit := fs.Int64("limit", 25, "max results to return")
-	all := fs.Bool("all", false, "include threading/cc headers in terminal output")
+	limit := fs.Int64("limit", mail.DefaultLimit,
+		fmt.Sprintf("results per page (max %d)", mail.MaxLimit))
+	pageToken := fs.String("page-token", "",
+		"continue an earlier search from its page.next_page_token")
+	verbose := verboseFlag(fs)
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket mail search --query \"...\" [--limit 25] [--all]")
+		return usageError(err.Error(), usage)
 	}
 	if *query == "" {
-		return usageError("--query is required and must not be empty",
-			"docket mail search --query \"from:emiel is:unread\" [--limit 25] [--all]")
+		return usageError("--query is required and must not be empty", usage)
+	}
+	if code, ok := checkLimit(*limit, usage); !ok {
+		return code
 	}
 
 	svc, labels, code := mailContext(ctx)
@@ -320,24 +389,36 @@ func cmdMailSearch(ctx context.Context, args []string) int {
 		return code
 	}
 
-	envelopes, err := mail.List(ctx, svc, labels, mail.ListOptions{Query: *query, Limit: *limit})
+	result, err := mail.List(ctx, svc, labels, mail.ListOptions{
+		Query: *query, Limit: *limit, PageToken: *pageToken,
+	})
 	if err != nil {
-		return out.Fail(out.ExitError, "GMAIL_API_ERROR", err.Error(), true)
+		return failMailAPI(err)
 	}
-	if *all {
-		return out.EmitVerbose(envelopes)
-	}
-	return out.Emit(envelopes)
+	return out.EmitResult(out.Result{
+		Data:    result.Envelopes,
+		Page:    pageOf(result, *limit),
+		Verbose: verbose(),
+	})
 }
 
 func cmdMailList(ctx context.Context, args []string) int {
+	const usage = "docket mail list --label INBOX [--limit 25, max 500] " +
+		"[--page-token <token>] [--unread] [--verbose]"
+
 	fs := newFlagSet("mail list")
 	label := fs.String("label", "INBOX", "label name to list, e.g. INBOX")
-	limit := fs.Int64("limit", 25, "max results to return")
+	limit := fs.Int64("limit", mail.DefaultLimit,
+		fmt.Sprintf("results per page (max %d)", mail.MaxLimit))
+	pageToken := fs.String("page-token", "",
+		"continue an earlier listing from its page.next_page_token")
 	unread := fs.Bool("unread", false, "only unread messages")
-	all := fs.Bool("all", false, "include threading/cc headers in terminal output")
+	verbose := verboseFlag(fs)
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket mail list --label INBOX [--limit 25] [--unread] [--all]")
+		return usageError(err.Error(), usage)
+	}
+	if code, ok := checkLimit(*limit, usage); !ok {
+		return code
 	}
 
 	svc, labels, code := mailContext(ctx)
@@ -359,28 +440,38 @@ func cmdMailList(ctx context.Context, args []string) int {
 		}
 	}
 
-	envelopes, err := mail.List(ctx, svc, labels, mail.ListOptions{LabelIDs: ids, Limit: *limit})
+	result, err := mail.List(ctx, svc, labels, mail.ListOptions{
+		LabelIDs: ids, Limit: *limit, PageToken: *pageToken,
+	})
 	if err != nil {
-		return out.Fail(out.ExitError, "GMAIL_API_ERROR", err.Error(), true)
+		return failMailAPI(err)
 	}
-	if *all {
-		return out.EmitVerbose(envelopes)
-	}
-	return out.Emit(envelopes)
+	return out.EmitResult(out.Result{
+		Data:    result.Envelopes,
+		Page:    pageOf(result, *limit),
+		Verbose: verbose(),
+	})
 }
 
 func cmdMailRead(ctx context.Context, args []string) int {
+	const usage = "docket mail read --id <gm-id> [--max-bytes 20000, or 0 for unlimited] [--verbose]"
+
 	fs := newFlagSet("mail read")
 	id := fs.String("id", "", "Gmail message id, from a search/list/thread result")
-	maxBytes := fs.Int("max-bytes", 20000, "truncate body at this many bytes")
-	all := fs.Bool("all", false, "include threading/cc headers in terminal output")
+	maxBytes := fs.Int("max-bytes", mail.DefaultMaxBytes,
+		"truncate body at this many bytes; 0 returns the whole body")
+	verbose := verboseFlag(fs)
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket mail read --id <gm-id> [--max-bytes 20000] [--all]")
+		return usageError(err.Error(), usage)
 	}
 	if *id == "" {
 		return usageError("--id is required and must not be empty",
-			"docket mail read --id <gm-id> [--max-bytes 20000] [--all]; ids come from "+
-				"`mail search`/`mail list` output, not from a subject line or index")
+			usage+"; ids come from `mail search`/`mail list` output, not from a subject line or index")
+	}
+	if *maxBytes < 0 {
+		return usageError(
+			fmt.Sprintf("--max-bytes %d is negative; pass 0 for no cap, or a positive byte count", *maxBytes),
+			usage)
 	}
 
 	svc, labels, code := mailContext(ctx)
@@ -390,25 +481,23 @@ func cmdMailRead(ctx context.Context, args []string) int {
 
 	msg, err := mail.Read(ctx, svc, labels, *id, *maxBytes)
 	if err != nil {
-		return out.Fail(out.ExitNotFound, "MESSAGE_NOT_FOUND", err.Error(), false)
+		return failMailLookup("MESSAGE_NOT_FOUND", err)
 	}
-	if *all {
-		return out.EmitVerbose(msg)
-	}
-	return out.Emit(msg)
+	return out.EmitResult(out.Result{Data: msg, Verbose: verbose()})
 }
 
 func cmdMailThread(ctx context.Context, args []string) int {
+	const usage = "docket mail thread --id <gm-thread-id> [--verbose]"
+
 	fs := newFlagSet("mail thread")
 	id := fs.String("id", "", "Gmail thread id, from a search/list/read result's thread_id")
-	all := fs.Bool("all", false, "include threading/cc headers in terminal output")
+	verbose := verboseFlag(fs)
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket mail thread --id <gm-thread-id> [--all]")
+		return usageError(err.Error(), usage)
 	}
 	if *id == "" {
 		return usageError("--id is required and must not be empty",
-			"docket mail thread --id <gm-thread-id> [--all]; thread ids come from an "+
-				"Envelope's thread_id field, not the message id")
+			usage+"; thread ids come from an Envelope's thread_id field, not the message id")
 	}
 
 	svc, labels, code := mailContext(ctx)
@@ -418,12 +507,9 @@ func cmdMailThread(ctx context.Context, args []string) int {
 
 	thread, err := mail.GetThread(ctx, svc, labels, *id)
 	if err != nil {
-		return out.Fail(out.ExitNotFound, "THREAD_NOT_FOUND", err.Error(), false)
+		return failMailLookup("THREAD_NOT_FOUND", err)
 	}
-	if *all {
-		return out.EmitVerbose(thread)
-	}
-	return out.Emit(thread)
+	return out.EmitResult(out.Result{Data: thread, Verbose: verbose()})
 }
 
 func cmdMailSend(ctx context.Context, args []string) int {
@@ -433,13 +519,13 @@ func cmdMailSend(ctx context.Context, args []string) int {
 	bodyFile := fs.String("body-file", "", "path to plain-text body, or - for stdin")
 	confirm := fs.Bool("confirm", false, "actually send (required)")
 	dryRun := fs.Bool("dry-run", false, "preview without sending")
-	all := fs.Bool("all", false, "include threading/cc headers in terminal output")
+	verbose := verboseFlag(fs)
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket mail send --to ... --subject ... --body-file - [--confirm] [--all]")
+		return usageError(err.Error(), "docket mail send --to ... --subject ... --body-file - [--confirm] [--verbose]")
 	}
 	if *to == "" || *subject == "" || *bodyFile == "" {
 		return usageError("--to, --subject, and --body-file are all required",
-			"docket mail send --to ... --subject ... --body-file - [--confirm] [--all]")
+			"docket mail send --to ... --subject ... --body-file - [--confirm] [--verbose]")
 	}
 	body, err := readBodyFile(*bodyFile)
 	if err != nil {
@@ -464,12 +550,12 @@ func cmdMailSend(ctx context.Context, args []string) int {
 
 	env, err := plan.Execute(ctx, svc, labels)
 	if err != nil {
-		return out.Fail(out.ExitError, "SEND_FAILED", err.Error(), true)
+		// Not retryable whatever the cause: the Gmail send may have
+		// succeeded before the error surfaced, and a caller that backs off
+		// and re-runs sends the message twice. A human decides here.
+		return out.Fail(out.ExitError, "SEND_FAILED", err.Error(), false)
 	}
-	if *all {
-		return out.EmitVerbose(env)
-	}
-	return out.Emit(env)
+	return out.EmitResult(out.Result{Data: env, Verbose: verbose()})
 }
 
 func cmdMailReply(ctx context.Context, args []string) int {
@@ -478,13 +564,13 @@ func cmdMailReply(ctx context.Context, args []string) int {
 	bodyFile := fs.String("body-file", "", "path to plain-text body, or - for stdin")
 	confirm := fs.Bool("confirm", false, "actually send (required)")
 	dryRun := fs.Bool("dry-run", false, "preview without sending")
-	all := fs.Bool("all", false, "include threading/cc headers in terminal output")
+	verbose := verboseFlag(fs)
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket mail reply --id <gm-id> --body-file - [--confirm] [--all]")
+		return usageError(err.Error(), "docket mail reply --id <gm-id> --body-file - [--confirm] [--verbose]")
 	}
 	if *id == "" || *bodyFile == "" {
 		return usageError("--id and --body-file are both required",
-			"docket mail reply --id <gm-id> --body-file - [--confirm] [--all]")
+			"docket mail reply --id <gm-id> --body-file - [--confirm] [--verbose]")
 	}
 	body, err := readBodyFile(*bodyFile)
 	if err != nil {
@@ -498,7 +584,7 @@ func cmdMailReply(ctx context.Context, args []string) int {
 
 	plan, err := mail.PrepareReply(ctx, svc, *id, body)
 	if err != nil {
-		return out.Fail(out.ExitNotFound, "MESSAGE_NOT_FOUND", err.Error(), false)
+		return failMailLookup("MESSAGE_NOT_FOUND", err)
 	}
 
 	rerun := fmt.Sprintf("docket mail reply --id %s --body-file %s --confirm", *id, *bodyFile)
@@ -509,12 +595,12 @@ func cmdMailReply(ctx context.Context, args []string) int {
 
 	env, err := plan.Execute(ctx, svc, labels)
 	if err != nil {
-		return out.Fail(out.ExitError, "SEND_FAILED", err.Error(), true)
+		// Not retryable whatever the cause: the Gmail send may have
+		// succeeded before the error surfaced, and a caller that backs off
+		// and re-runs sends the message twice. A human decides here.
+		return out.Fail(out.ExitError, "SEND_FAILED", err.Error(), false)
 	}
-	if *all {
-		return out.EmitVerbose(env)
-	}
-	return out.Emit(env)
+	return out.EmitResult(out.Result{Data: env, Verbose: verbose()})
 }
 
 func cmdMailLabel(ctx context.Context, args []string) int {
@@ -524,13 +610,13 @@ func cmdMailLabel(ctx context.Context, args []string) int {
 	remove := fs.String("remove", "", "comma-separated label names to remove")
 	confirm := fs.Bool("confirm", false, "actually apply the change (required)")
 	dryRun := fs.Bool("dry-run", false, "preview without applying")
-	all := fs.Bool("all", false, "include threading/cc headers in terminal output")
+	verbose := verboseFlag(fs)
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket mail label --id <gm-id> --add Foo --remove INBOX [--confirm] [--all]")
+		return usageError(err.Error(), "docket mail label --id <gm-id> --add Foo --remove INBOX [--confirm] [--verbose]")
 	}
 	if *id == "" {
 		return usageError("--id is required and must not be empty",
-			"docket mail label --id <gm-id> --add Foo --remove INBOX [--confirm] [--all]")
+			"docket mail label --id <gm-id> --add Foo --remove INBOX [--confirm] [--verbose]")
 	}
 	addNames := splitCommaList(*add)
 	removeNames := splitCommaList(*remove)
@@ -558,12 +644,9 @@ func cmdMailLabel(ctx context.Context, args []string) int {
 
 	env, err := plan.Execute(ctx, svc, labels)
 	if err != nil {
-		return out.Fail(out.ExitError, "LABEL_FAILED", err.Error(), true)
+		return failMailAPI(err)
 	}
-	if *all {
-		return out.EmitVerbose(env)
-	}
-	return out.Emit(env)
+	return out.EmitResult(out.Result{Data: env, Verbose: verbose()})
 }
 
 // --- cal ---
