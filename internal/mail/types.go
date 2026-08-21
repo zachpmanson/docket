@@ -18,13 +18,20 @@ type Envelope struct {
 	Snippet    string   `json:"snippet"`
 }
 
-// Attachment is metadata only; fetching bytes is a separate, explicit call
-// (not yet implemented — phase 3 in the build order).
+// Attachment is metadata only; the bytes come from a separate, explicit
+// `mail attachment` call, keyed by PartID. Size is what lets a caller decide
+// against that call before making it.
+//
+// ContentID is the target of a cid: URL in the html body, present only on the
+// parts an html body references. Without it a consumer holding
+// `cid:ii_abc123` has no way to say which part id that is, and an inline
+// screenshot — which is content, not decoration — stays a broken image.
 type Attachment struct {
-	Filename string `json:"filename"`
-	MimeType string `json:"mime_type"`
-	Size     int64  `json:"size"`
-	PartID   string `json:"part_id"`
+	Filename  string `json:"filename"`
+	MimeType  string `json:"mime_type"`
+	Size      int64  `json:"size"`
+	PartID    string `json:"part_id"`
+	ContentID string `json:"content_id,omitempty"`
 }
 
 // html_status values, reported whenever the caller asked for HTML.

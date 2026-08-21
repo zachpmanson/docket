@@ -65,6 +65,15 @@ func envelopeFromMessage(msg *gmail.Message, labels *LabelCache) Envelope {
 	}
 }
 
+// contentID returns a part's Content-ID with the angle brackets RFC 2392
+// requires in the header stripped, because the cid: URL in an html body
+// carries the bare token. Returning the header verbatim would leave every
+// consumer doing the same trim, and one of them getting it wrong is a broken
+// image with no error anywhere.
+func contentID(part *gmail.MessagePart) string {
+	return strings.Trim(header(part.Headers, "Content-ID"), "<>")
+}
+
 func decodeBase64URL(data string) string {
 	b, err := base64.URLEncoding.WithPadding(base64.NoPadding).DecodeString(data)
 	if err != nil {
@@ -172,10 +181,11 @@ func findBody(part *gmail.MessagePart) (plain, html string, attachments []Attach
 
 	if part.Filename != "" {
 		attachments = append(attachments, Attachment{
-			Filename: part.Filename,
-			MimeType: part.MimeType,
-			Size:     part.Body.Size,
-			PartID:   part.PartId,
+			Filename:  part.Filename,
+			MimeType:  part.MimeType,
+			Size:      part.Body.Size,
+			PartID:    part.PartId,
+			ContentID: contentID(part),
 		})
 	} else if part.Body != nil && part.Body.Data != "" {
 		switch part.MimeType {
