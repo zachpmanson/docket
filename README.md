@@ -98,7 +98,7 @@ Verify with `docket auth whoami`.
 |---|---|
 | `mail search --query "..."` | Native Gmail query syntax (`from:emiel is:unread`) |
 | `mail list --label INBOX [--unread]` | List messages in a label |
-| `mail read --id <gm-msgid>` | Full body; prefers `text/plain`, truncates at `--max-bytes` |
+| `mail read --id <gm-msgid>` | Full body; prefers `text/plain`, truncates at `--max-bytes` (`0` = no cap) |
 | `mail thread --id <gm-thrid>` | Read a whole conversation |
 | `mail send --to ... --subject ... --body-file -` | Send (mutating: `--confirm`) |
 | `mail reply --id <gm-msgid> --body-file -` | Reply (mutating: `--confirm`) |
@@ -106,6 +106,22 @@ Verify with `docket auth whoami`.
 
 `search`/`list` return envelopes only (id, thread id, from/to, subject, date, labels,
 snippet) — bodies are expensive, so callers ask for them explicitly with `read`.
+
+Notes:
+
+- `--limit` is the size of **one page**, defaulting to 25 and capped at 500 (Gmail's own
+  ceiling for a single `messages.list` call). Asking for more is a usage error rather than a
+  silent clamp, because 500 results out of 3000 are indistinguishable from a complete answer.
+- To walk a result set larger than one page, pass the `page.next_page_token` from the
+  envelope back as `--page-token`. `page.has_more` is the short answer to "did I get
+  everything"; see the output contract below.
+- `mail read --max-bytes 0` returns the whole body. Truncation cuts from the **end**, which
+  in a forwarded trail is the oldest quoted material, so the cap is worth turning off
+  whenever the point of the read is history rather than the latest reply. `truncated: true`
+  says a cap was applied.
+- `--verbose` adds the threading/cc columns to the *terminal* table. JSON output always
+  contains every field, so it does nothing for a programmatic caller. `--all` is a
+  deprecated alias.
 
 ### `docket cal` — Google Calendar (CalDAV + client-side RRULE expansion)
 | Subcommand | Purpose |
@@ -145,10 +161,33 @@ Every command emits **one JSON envelope** on stdout:
 { "ok": true, "data": { }, "warnings": [], "error": null }
 ```
 
+`search`/`list` add a `page` object describing what you are holding:
+
+```json
+{ "ok": true, "data": [ ],
+  "page": { "returned": 500, "limit": 500, "has_more": true, "next_page_token": "09vv…" },
+  "error": null }
+```
+
 ```json
 { "ok": false, "data": null,
-  "error": { "code": "AUTH_EXPIRED", "message": "refresh token rejected", "retryable": false } }
+  "error": { "code": "AUTH_EXPIRED", "message": "refresh token rejected", "retryable": true } }
 ```
+
+Two invariants hold for every command, enforced where the envelope is serialised:
+
+- `ok: false` always carries a non-null `error` with a populated `code`, `message` and
+  `retryable`, and always exits non-zero. A caller reading `ok` and then `error.message`
+  never has to handle a null.
+- `retryable: true` is claimed only for causes known to be transient — rate limits, 5xx,
+  network timeouts, a refresh worth reattempting. A usage error, a missing message, or an
+  unrecognised failure reports `false`, so a client that backs off on `retryable` never
+  loops on something that cannot succeed.
+
+Mail error codes a caller may branch on: `RATE_LIMITED`, `AUTH_EXPIRED`, `AUTH_REVOKED`,
+`PERMISSION_DENIED`, `MESSAGE_NOT_FOUND` / `THREAD_NOT_FOUND`, `GMAIL_SERVER_ERROR`,
+`NETWORK_ERROR`, `TIMEOUT`, `USAGE_ERROR`, `SEND_FAILED`, `CONFIRM_REQUIRED`,
+`WRITES_DISABLED`, `GMAIL_API_ERROR` (unclassified).
 
 **Exit codes** (an agent's control flow is driven by these, not by parsing prose):
 

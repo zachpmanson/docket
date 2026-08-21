@@ -2,21 +2,38 @@ package mail
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"unicode/utf8"
 
 	"google.golang.org/api/gmail/v1"
 )
 
-const defaultMaxBytes = 20_000
+// DefaultMaxBytes caps a body when the caller does not say otherwise.
+// NoMaxBytes is the sentinel meaning "no cap at all": truncation happens at
+// the END of a body, and the end of a forward holds the OLDEST quoted
+// material, so a caller reconstructing history needs a way to ask for all of
+// it that does not involve guessing a number large enough.
+const (
+	DefaultMaxBytes = 20_000
+	NoMaxBytes      = 0
+)
+
+// ErrNegativeMaxBytes marks a negative cap as the caller's mistake rather
+// than something to interpret. Reading it as "unlimited" would collide with
+// the explicit sentinel, and reading it as "the default" would silently
+// truncate a caller who was plainly reaching for the opposite.
+var ErrNegativeMaxBytes = errors.New("--max-bytes must be 0 (unlimited) or a positive byte count")
 
 // Read fetches a single message by its stable Gmail id (the id field
 // returned by Search/List — not an IMAP UID or sequence number) and returns
 // its body, preferring text/plain and falling back to text/html converted
 // to plain text. The body is truncated at maxBytes with Truncated=true so
-// the agent knows it didn't see everything; maxBytes<=0 uses the default.
+// the agent knows it didn't see everything; maxBytes of NoMaxBytes returns
+// the whole body.
 func Read(ctx context.Context, svc *gmail.Service, labels *LabelCache, id string, maxBytes int) (*Message, error) {
-	if maxBytes <= 0 {
-		maxBytes = defaultMaxBytes
+	if maxBytes < 0 {
+		return nil, fmt.Errorf("--max-bytes %d: %w", maxBytes, ErrNegativeMaxBytes)
 	}
 
 	msg, err := svc.Users.Messages.Get(meUser, id).Format("full").Context(ctx).Do()
@@ -33,8 +50,8 @@ func Read(ctx context.Context, svc *gmail.Service, labels *LabelCache, id string
 	}
 
 	truncated := false
-	if len(body) > maxBytes {
-		body = body[:maxBytes]
+	if maxBytes != NoMaxBytes && len(body) > maxBytes {
+		body = truncateAtRune(body, maxBytes)
 		truncated = true
 	}
 
@@ -64,4 +81,18 @@ func GetThread(ctx context.Context, svc *gmail.Service, labels *LabelCache, thre
 		messages[i] = envelopeFromMessage(msg, labels)
 	}
 	return &Thread{ThreadID: threadID, Messages: messages}, nil
+}
+
+// truncateAtRune cuts s to at most n bytes without splitting the rune that
+// straddles the boundary — a half rune would be re-encoded as U+FFFD in the
+// JSON envelope, corrupting the last visible characters of the body a caller
+// did receive.
+func truncateAtRune(s string, n int) string {
+	if n >= len(s) {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }

@@ -205,9 +205,9 @@ not a new one.
 ### Commands
 
 ```
-docket mail search  --query "from:emiel is:unread" [--limit 25] [--since 7d]
-docket mail list    --label INBOX [--limit] [--unread]
-docket mail read    --id <gm-msgid> [--format text|raw] [--max-bytes 20000]
+docket mail search  --query "from:emiel is:unread" [--limit 25] [--page-token <tok>] [--since 7d]
+docket mail list    --label INBOX [--limit 25] [--page-token <tok>] [--unread]
+docket mail read    --id <gm-msgid> [--format text|raw] [--max-bytes 20000|0]
 docket mail thread  --id <gm-thrid>
 docket mail send    --to ... --subject ... --body-file - [--confirm]
 docket mail reply   --id <gm-msgid> --body-file - [--confirm]
@@ -223,12 +223,24 @@ make the agent ask for them. (The envelope package has an internal namesake; the
 `mail.Envelope` fields — see `internal/mail/types.go`.)
 
 The threading/cc fields are always present in JSON output (the agent-facing form), but hidden from
-the human-readable terminal table by default — pass `--all` on `search`/`list`/`read`/`thread`/
-`send`/`reply`/`label` to show them. Fields gated this way carry a `verbose:"…"` struct tag read by
-the table renderer.
+the human-readable terminal table by default — pass `--verbose` on `search`/`list`/`read`/`thread`/
+`send`/`reply`/`label` to show them (`--all` is a deprecated alias). Fields gated this way carry a
+`verbose:"…"` struct tag read by the table renderer. Because JSON is unaffected, the flag is purely
+a terminal concern; the old name, sitting beside `--limit`, invited callers to read it as "all
+results", which it never meant.
+
+`search` and `list` return **one page**. `--limit` is that page's size, defaulting to 25 and capped
+at Gmail's own `maxResults` ceiling of 500; exceeding it is a usage error rather than a clamp,
+because a clamped 500-of-3000 is indistinguishable from a complete result set. The envelope's
+`page` object (see §6) carries `has_more` and Gmail's `next_page_token`, which the caller passes
+back as `--page-token` to continue. `--limit` and `--page-token` compose: the limit applies to each
+page of a walk.
 
 `read` prefers `text/plain`, falls back to HTML converted to text, truncates at `--max-bytes`
 with an explicit `"truncated": true` field so the agent knows it didn't see everything.
+`--max-bytes 0` disables the cap: truncation cuts from the *end* of a body, which in a forwarded
+trail holds the oldest quoted material, so a caller reading for history needs a way to ask for all
+of it that is not a guessed-large number.
 Attachments are listed as metadata (filename, mime type, size, part id) and fetched only via
 an explicit `mail attachment --part`.
 
@@ -376,9 +388,39 @@ deployment three tiers: fully open, own-events-only, fully closed.
 {
   "ok": false,
   "data": null,
-  "error": { "code": "AUTH_EXPIRED", "message": "refresh token rejected", "retryable": false }
+  "error": { "code": "AUTH_EXPIRED", "message": "refresh token rejected", "retryable": true }
 }
 ```
+
+`search`/`list` add a `page` object beside `data`, so that a partial result is visible without
+the caller having to infer it from a result count:
+
+```json
+{
+  "ok": true,
+  "data": [ ],
+  "page": { "returned": 500, "limit": 500, "has_more": true, "next_page_token": "09vv…" },
+  "error": null
+}
+```
+
+It rides on the envelope rather than inside `data` deliberately: `search` returns a bare array,
+`read` an object and `thread` an object with `messages`, and wrapping any of those to make room for
+paging metadata would break every existing caller for no gain in what they can learn.
+
+Two invariants are enforced in `out.writeJSON`, the single point where an envelope becomes bytes,
+rather than at each call site — a call site can be forgotten, and this contract is what a client's
+control flow rests on:
+
+- `ok: false` implies a non-null `error` with a populated `code` and `message`, and a non-zero exit
+  status. A client that reads `ok:false` with a null error has nothing to branch on: it cannot tell
+  a rate limit it should wait out from an empty result set it should accept.
+- `ok: true` implies `error: null`.
+
+`retryable` is claimed only for causes known to be transient (rate limits, 5xx, network timeouts, a
+token refresh worth reattempting). Usage errors, missing messages and unrecognised failures report
+`false`. The field's whole purpose is to drive a client's back-off decision, so a blanket `true`
+turns a malformed query into an unbounded retry loop against a quota.
 
 `error.message` is written for the agent, per principle 7 — e.g. a bad `--label` value names
 the labels that do exist; a missing `--confirm` echoes the exact command with `--confirm`

@@ -17,10 +17,10 @@
           version = "0.1.0";
           src = ./.;
           vendorHash = "sha256-9+jYyNOePa1N4nfVe/MsS0DcPvVwX2gry6WVQjAufvE=";
-          # No test files exist yet (go test ./... finds none); set this
-          # explicitly rather than relying on the default check phase's
-          # behavior against an empty test suite.
-          doCheck = false;
+          # The suite is hermetic — the Gmail client is driven through its
+          # endpoint against an in-process fake — so it is safe to run in a
+          # sandboxed build with no network.
+          doCheck = true;
         };
 
         devShells.default = pkgs.mkShell {

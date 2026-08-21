@@ -144,7 +144,7 @@ func fieldNames(t reflect.Type, verbose bool) []string {
 
 // isVerboseField reports whether a struct field carries a `verbose:"…"` tag.
 // Such fields are included in table/key-value terminal output only when the
-// caller opted into verbose rendering (EmitVerbose / --all); JSON output
+// caller opted into verbose rendering (--verbose); JSON output
 // always includes them.
 func isVerboseField(f reflect.StructField) bool {
 	return f.Tag.Get("verbose") != ""
