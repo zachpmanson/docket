@@ -2,6 +2,7 @@ package mail
 
 import (
 	"encoding/base64"
+	"html"
 	"regexp"
 	"strings"
 
@@ -76,16 +77,94 @@ func decodeBase64URL(data string) string {
 	return string(b)
 }
 
+// scriptStyleRE matches a <script> or <style> element together with its
+// content. Stripping only the tags would leave the CSS or JS between them
+// in the plain-text body, and in HTML-only marketing mail that payload is
+// routinely larger than the prose it surrounds.
+var scriptStyleRE = regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script\s*>|<style\b[^>]*>.*?</style\s*>`)
+
 var htmlTagRE = regexp.MustCompile(`(?s)<[^>]*>`)
 
-func htmlToText(html string) string {
-	text := htmlTagRE.ReplaceAllString(html, "")
-	return strings.TrimSpace(text)
+// htmlToText renders a text/html part as the plain-text body, for a message
+// that carries no text/plain part of its own.
+//
+// Character references are resolved here and nowhere else. A caller cannot
+// do it afterwards: a body that legitimately contains the literal text
+// "&amp;" — a plain-text part quoting HTML source, or a URL a sender typed
+// by hand — must survive untouched, and only this path knows that what it
+// holds is markup. A blanket unescape applied to the body field would
+// corrupt exactly those messages.
+//
+// The order is load-bearing. Tags are stripped first, references second:
+// unescaping first would turn a source "&lt;div&gt;" into "<div>", which the
+// tag strip would then delete, silently removing text the message displayed.
+func htmlToText(markup string) string {
+	text := scriptStyleRE.ReplaceAllString(markup, "")
+	text = htmlTagRE.ReplaceAllString(text, "")
+	return strings.TrimSpace(html.UnescapeString(text))
 }
 
-// findBody walks the MIME part tree preferring text/plain, falling back to
-// text/html converted to plain text. It also collects attachment metadata
-// for every part that has a filename.
+// maxRefLen bounds the backward scan for an unterminated character
+// reference: the longest name in the HTML5 named-reference table is
+// "&CounterClockwiseContourIntegral;", 33 bytes with its terminator.
+const maxRefLen = 33
+
+// truncateHTML applies a byte cap to a text/html part and reports whether it
+// bit. The cut is pulled back to sit after the last complete tag and the last
+// complete character reference, so what a caller receives is a document that
+// ends early rather than one whose tail is a fragment.
+//
+// The alternative — cutting at the byte the cap names — ends bodies mid-tag,
+// and a parser recovering from "<a href=\"https://exa" swallows the rest of
+// the document into an attribute value: the visible loss is everything after
+// the cut, not just the fragment. Unclosed *elements* are left as they are,
+// because every HTML parser closes those implicitly.
+func truncateHTML(s string, n int) (string, bool) {
+	if n >= len(s) {
+		return s, false
+	}
+	cut := truncateAtRune(s, n)
+	if i := strings.LastIndexByte(cut, '<'); i > strings.LastIndexByte(cut, '>') {
+		cut = cut[:i]
+	}
+	if i := unterminatedRef(cut); i >= 0 {
+		cut = cut[:i]
+	}
+	return cut, true
+}
+
+// unterminatedRef returns the index of a character reference left open at the
+// end of s, or -1. A half-written "&am" renders as visible garbage, and a
+// downstream sanitiser re-serialising it can turn it into something else
+// again.
+func unterminatedRef(s string) int {
+	lo := max(len(s)-maxRefLen, 0)
+	for i := len(s) - 1; i >= lo; i-- {
+		switch s[i] {
+		case ';', '<', '>', ' ', '\t', '\n', '\r':
+			return -1
+		case '&':
+			return i
+		}
+	}
+	return -1
+}
+
+// findBody walks the MIME part tree in document order and returns the first
+// text/plain part and the first text/html part it finds, plus attachment
+// metadata for every part carrying a filename.
+//
+// Both parts are returned rather than one: the plain part is the body, and
+// the html part is what --html hands back untouched. For the usual
+// multipart/alternative pair that means the text/plain and the text/html
+// representations of the same message. Nesting is irrelevant to the choice —
+// a multipart/mixed wrapping an alternative, or a multipart/related pairing
+// an html part with the images it references, resolve to the same two parts.
+//
+// Inline images are never body candidates: a part is only considered for a
+// body if its MIME type says text/plain or text/html, so the image/* members
+// of a multipart/related are skipped, and appear under attachments when they
+// carry a filename.
 func findBody(part *gmail.MessagePart) (plain, html string, attachments []Attachment) {
 	if part == nil {
 		return "", "", nil

@@ -455,12 +455,14 @@ func cmdMailList(ctx context.Context, args []string) int {
 }
 
 func cmdMailRead(ctx context.Context, args []string) int {
-	const usage = "docket mail read --id <gm-id> [--max-bytes 20000 (0 = no cap)] [--verbose]"
+	const usage = "docket mail read --id <gm-id> [--max-bytes 20000 (0 = no cap)] [--html] [--verbose]"
 
 	fs := newFlagSet("mail read")
 	id := fs.String("id", "", "Gmail message id, from a search/list/thread result")
 	maxBytes := fs.Int("max-bytes", mail.DefaultMaxBytes,
 		"truncate body at this many bytes; 0 returns the whole body")
+	withHTML := fs.Bool("html", false,
+		"also return the raw text/html part as body_html, with html_status saying whether there was one")
 	verbose := verboseFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return usageError(err.Error(), usage)
@@ -480,7 +482,7 @@ func cmdMailRead(ctx context.Context, args []string) int {
 		return code
 	}
 
-	msg, err := mail.Read(ctx, svc, labels, *id, *maxBytes)
+	msg, err := mail.Read(ctx, svc, labels, *id, mail.ReadOptions{MaxBytes: *maxBytes, IncludeHTML: *withHTML})
 	if err != nil {
 		return failMailLookup("MESSAGE_NOT_FOUND", err)
 	}
@@ -488,10 +490,14 @@ func cmdMailRead(ctx context.Context, args []string) int {
 }
 
 func cmdMailThread(ctx context.Context, args []string) int {
-	const usage = "docket mail thread --id <gm-thread-id> [--verbose]"
+	const usage = "docket mail thread --id <gm-thread-id> [--html [--max-bytes 20000 (0 = no cap)]] [--verbose]"
 
 	fs := newFlagSet("mail thread")
 	id := fs.String("id", "", "Gmail thread id, from a search/list/read result's thread_id")
+	withHTML := fs.Bool("html", false,
+		"return every message's body and raw text/html part, not just its envelope")
+	maxBytes := fs.Int("max-bytes", mail.DefaultMaxBytes,
+		"with --html, truncate each body at this many bytes; 0 returns whole bodies")
 	verbose := verboseFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return usageError(err.Error(), usage)
@@ -500,13 +506,19 @@ func cmdMailThread(ctx context.Context, args []string) int {
 		return usageError("--id is required and must not be empty",
 			usage+"; thread ids come from an Envelope's thread_id field, not the message id")
 	}
+	if *maxBytes < 0 {
+		return usageError(
+			fmt.Sprintf("--max-bytes %d is negative; pass 0 for no cap, or a positive byte count", *maxBytes),
+			usage)
+	}
 
 	svc, labels, code := mailContext(ctx)
 	if code != out.ExitOK {
 		return code
 	}
 
-	thread, err := mail.GetThread(ctx, svc, labels, *id)
+	thread, err := mail.GetThread(ctx, svc, labels, *id,
+		mail.ReadOptions{MaxBytes: *maxBytes, IncludeHTML: *withHTML})
 	if err != nil {
 		return failMailLookup("THREAD_NOT_FOUND", err)
 	}

@@ -98,8 +98,8 @@ Verify with `docket auth whoami`.
 |---|---|
 | `mail search --query "..."` | Native Gmail query syntax (`from:emiel is:unread`) |
 | `mail list --label INBOX [--unread]` | List messages in a label |
-| `mail read --id <gm-msgid>` | Full body; prefers `text/plain`, truncates at `--max-bytes` (`0` = no cap) |
-| `mail thread --id <gm-thrid>` | Read a whole conversation |
+| `mail read --id <gm-msgid>` | Full body; prefers `text/plain`, truncates at `--max-bytes` (`0` = no cap); `--html` adds the raw `text/html` part |
+| `mail thread --id <gm-thrid>` | Read a whole conversation (envelopes only unless `--html`) |
 | `mail send --to ... --subject ... --body-file -` | Send (mutating: `--confirm`) |
 | `mail reply --id <gm-msgid> --body-file -` | Reply (mutating: `--confirm`) |
 | `mail label --id <gm-msgid> --add Foo --remove INBOX` | Apply/remove labels (mutating: `--confirm`) |
@@ -119,6 +119,32 @@ Notes:
   in a forwarded trail is the oldest quoted material, so the cap is worth turning off
   whenever the point of the read is history rather than the latest reply. `truncated: true`
   says a cap was applied.
+- `--html` on `read` adds two fields: `body_html`, the `text/html` part exactly as sent,
+  and `html_status`, which is `present` or `none`. `none` means the message genuinely has no
+  html part — a text-only message is normal mail, and a caller has to be able to tell that
+  from a flag that did nothing, which is why the field is absent altogether without `--html`.
+  Nothing is sanitised: strip what you will not render at render time, on the reasoning that
+  you can inspect your own sanitiser and cannot inspect ours.
+- Which part `--html` returns: the first `text/html` part in the MIME tree, and `body` stays
+  the first `text/plain` part. For the usual `multipart/alternative` that is the two
+  representations of the same message. Nesting does not change the choice — a
+  `multipart/mixed` wrapping an alternative resolves to the same pair. In a
+  `multipart/related`, the html part is returned and the `image/*` parts it references are
+  not: inline images appear under `attachments` when they carry a filename, and the `cid:`
+  URLs in the markup that point at them do not resolve to anything docket hands back.
+  A message with only a `text/html` part still gets a `body`, its markup rendered as text.
+- `--html` on `thread` returns every message's `body` and `body_html` rather than envelopes
+  alone, from the same single API call, and honours `--max-bytes` per body. It is opt-in
+  because a conversation's worth of bodies is the largest response docket produces. The
+  text body comes along with the markup because a text-only reply in the middle of a thread
+  has nothing else to render.
+- `html_truncated: true` says the markup you hold is incomplete. It is separate from
+  `truncated`, which is about `body`: the cap applies to each body on its own, and an html
+  part is routinely an order of magnitude larger than the text beside it, so one flag for
+  both would report a whole text body as cut. Truncated markup is cut back to sit after the
+  last complete tag and character reference, so it parses — a cut left mid-tag does not, a
+  parser swallows the remainder of the document into an attribute value. Elements left
+  unclosed are fine; every html parser closes those implicitly.
 - `--verbose` adds the threading/cc columns to the *terminal* table. JSON output always
   contains every field, so it does nothing for a programmatic caller. `--all` is a
   deprecated alias.

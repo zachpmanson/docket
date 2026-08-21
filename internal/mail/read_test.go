@@ -16,11 +16,11 @@ func syntheticTrail(size int) string {
 	return head[:size-len(tail)] + tail
 }
 
-func readFixture(t *testing.T, body string, maxBytes int) (*Message, error) {
+func readFixture(t *testing.T, body string, opts ReadOptions) (*Message, error) {
 	t.Helper()
 	f := newFakeGmail(t, map[string]listPage{"": {ids: []string{"m1"}}})
 	f.bodies["m1"] = body
-	return Read(context.Background(), f.service(t), emptyLabels(), "m1", maxBytes)
+	return Read(context.Background(), f.service(t), emptyLabels(), "m1", opts)
 }
 
 func TestReadNoMaxBytesReturnsTheWholeBody(t *testing.T) {
@@ -29,7 +29,7 @@ func TestReadNoMaxBytesReturnsTheWholeBody(t *testing.T) {
 	// first, which is exactly what such a caller came for.
 	body := syntheticTrail(60_000)
 
-	msg, err := readFixture(t, body, NoMaxBytes)
+	msg, err := readFixture(t, body, ReadOptions{MaxBytes: NoMaxBytes})
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestReadNoMaxBytesReturnsTheWholeBody(t *testing.T) {
 func TestReadCapAppliesAndIsReported(t *testing.T) {
 	body := syntheticTrail(60_000)
 
-	msg, err := readFixture(t, body, 1_000)
+	msg, err := readFixture(t, body, ReadOptions{MaxBytes: 1_000})
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestReadCapAppliesAndIsReported(t *testing.T) {
 }
 
 func TestReadUnderTheCapIsNotMarkedTruncated(t *testing.T) {
-	msg, err := readFixture(t, "short body", DefaultMaxBytes)
+	msg, err := readFixture(t, "short body", ReadOptions{MaxBytes: DefaultMaxBytes})
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestReadCapExactlyAtBodyLengthDoesNotTruncate(t *testing.T) {
 	// caller after a page that does not exist.
 	body := "exactly this long"
 
-	msg, err := readFixture(t, body, len(body))
+	msg, err := readFixture(t, body, ReadOptions{MaxBytes: len(body)})
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestReadRejectsANegativeCap(t *testing.T) {
 	// Reading a negative as "unlimited" would collide with the sentinel, and
 	// reading it as "the default" would truncate a caller plainly reaching
 	// for the opposite.
-	_, err := readFixture(t, "body", -1)
+	_, err := readFixture(t, "body", ReadOptions{MaxBytes: -1})
 	if !errors.Is(err, ErrNegativeMaxBytes) {
 		t.Fatalf("err = %v, want ErrNegativeMaxBytes", err)
 	}
@@ -101,7 +101,7 @@ func TestReadTruncationKeepsValidUTF8(t *testing.T) {
 	// visible characters of the body the caller did receive.
 	body := strings.Repeat("日", 100)
 
-	msg, err := readFixture(t, body, 10)
+	msg, err := readFixture(t, body, ReadOptions{MaxBytes: 10})
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
