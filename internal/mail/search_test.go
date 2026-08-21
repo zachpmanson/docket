@@ -38,6 +38,20 @@ type fakeGmail struct {
 
 	// threads keyed by thread id, listing the message ids in the thread.
 	threads map[string][]string
+
+	// attachments keyed by attachment id, holding the decoded bytes the
+	// content endpoint hands back. Values are a handful of bytes: a fixture
+	// is here to prove the plumbing, not to carry a real file.
+	attachments map[string][]byte
+
+	// attachmentStatus keyed by attachment id, overriding the response with
+	// an HTTP status, so a test can drive the failure classes a bulk fetcher
+	// must keep apart.
+	attachmentStatus map[string]int
+
+	// attachmentRequests records the path of every attachments.get call, so a
+	// test can assert that a refused fetch cost no download.
+	attachmentRequests []string
 }
 
 type listPage struct {
@@ -48,10 +62,12 @@ type listPage struct {
 func newFakeGmail(t *testing.T, pages map[string]listPage) *fakeGmail {
 	t.Helper()
 	f := &fakeGmail{
-		pages:    pages,
-		bodies:   map[string]string{},
-		payloads: map[string]*gmail.MessagePart{},
-		threads:  map[string][]string{},
+		pages:            pages,
+		bodies:           map[string]string{},
+		payloads:         map[string]*gmail.MessagePart{},
+		threads:          map[string][]string{},
+		attachments:      map[string][]byte{},
+		attachmentStatus: map[string]int{},
 	}
 	mux := http.NewServeMux()
 
@@ -78,6 +94,28 @@ func newFakeGmail(t *testing.T, pages map[string]listPage) *fakeGmail {
 		}
 		writeJSON(t, w, msg)
 	})
+
+	// Registered alongside the messages subtree; the more specific pattern
+	// wins, so a content fetch does not fall through to messages.get.
+	mux.HandleFunc("/gmail/v1/users/me/messages/{id}/attachments/{attachmentID}",
+		func(w http.ResponseWriter, r *http.Request) {
+			f.attachmentRequests = append(f.attachmentRequests, r.URL.Path)
+			attID := r.PathValue("attachmentID")
+			if status, ok := f.attachmentStatus[attID]; ok {
+				http.Error(w, fmt.Sprintf(`{"error":{"code":%d,"message":"driven by the fixture"}}`, status), status)
+				return
+			}
+			data, ok := f.attachments[attID]
+			if !ok {
+				http.Error(w, `{"error":{"code":404,"message":"not found"}}`, http.StatusNotFound)
+				return
+			}
+			writeJSON(t, w, gmail.MessagePartBody{
+				AttachmentId: attID,
+				Size:         int64(len(data)),
+				Data:         base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(data),
+			})
+		})
 
 	mux.HandleFunc("/gmail/v1/users/me/threads/", func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimPrefix(r.URL.Path, "/gmail/v1/users/me/threads/")

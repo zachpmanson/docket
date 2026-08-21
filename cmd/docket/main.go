@@ -171,7 +171,7 @@ func runAuth(ctx context.Context, args []string) int {
 func runMail(ctx context.Context, args []string) int {
 	if len(args) < 1 {
 		return usageError("missing mail subcommand",
-			"docket mail <search|list|read|thread|send|reply|label> [flags]")
+			"docket mail <search|list|read|thread|attachment|send|reply|label> [flags]")
 	}
 	switch args[0] {
 	case "search":
@@ -182,6 +182,8 @@ func runMail(ctx context.Context, args []string) int {
 		return cmdMailRead(ctx, args[1:])
 	case "thread":
 		return cmdMailThread(ctx, args[1:])
+	case "attachment":
+		return cmdMailAttachment(ctx, args[1:])
 	case "send":
 		return cmdMailSend(ctx, args[1:])
 	case "reply":
@@ -191,7 +193,7 @@ func runMail(ctx context.Context, args []string) int {
 	default:
 		return usageError(
 			fmt.Sprintf("unknown mail subcommand %q", args[0]),
-			"docket mail <search|list|read|thread|send|reply|label> [flags]")
+			"docket mail <search|list|read|thread|attachment|send|reply|label> [flags]")
 	}
 }
 
@@ -523,6 +525,83 @@ func cmdMailThread(ctx context.Context, args []string) int {
 		return failMailLookup("THREAD_NOT_FOUND", err)
 	}
 	return out.EmitResult(out.Result{Data: thread, Verbose: verbose()})
+}
+
+// cmdMailAttachment fetches one part's bytes to a file. One part per
+// invocation: the Gmail API has no batch attachments endpoint, so fetching
+// several in one call would save a subprocess spawn and not a single round
+// trip, and it would need a per-part result shape that the envelope's one
+// `ok` boolean cannot honestly express — a call where three of five parts are
+// gone is neither a success nor a failure. A caller looping over its own
+// metadata already has the outcome of each part separately, which is what it
+// needs to record which ones are missing.
+func cmdMailAttachment(ctx context.Context, args []string) int {
+	const usage = "docket mail attachment --id <gm-id> --part <part-id> --out <path> " +
+		"[--max-bytes 10485760 (0 = no cap)]"
+
+	fs := newFlagSet("mail attachment")
+	id := fs.String("id", "", "Gmail message id, from a search/list/thread result")
+	part := fs.String("part", "", "part id of the attachment, from an attachments entry in `mail read` output")
+	outPath := fs.String("out", "", "file to write the bytes to; its directory must already exist")
+	maxBytes := fs.Int("max-bytes", mail.DefaultAttachmentMaxBytes,
+		"refuse an attachment larger than this many bytes; 0 fetches any size")
+	if err := fs.Parse(args); err != nil {
+		return usageError(err.Error(), usage)
+	}
+	if *id == "" {
+		return usageError("--id is required and must not be empty",
+			usage+"; ids come from `mail search`/`mail list` output, not from a subject line or index")
+	}
+	if *part == "" {
+		return usageError("--part is required and must not be empty",
+			usage+"; part ids come from the attachments list in `mail read` output")
+	}
+	if *outPath == "" {
+		return usageError("--out is required and must not be empty",
+			usage+"; the bytes are written to a file because stdout carries the JSON envelope")
+	}
+	if *maxBytes < 0 {
+		return usageError(
+			fmt.Sprintf("--max-bytes %d is negative; pass 0 for no cap, or a positive byte count", *maxBytes),
+			usage)
+	}
+
+	svc, _, code := mailContext(ctx)
+	if code != out.ExitOK {
+		return code
+	}
+
+	got, err := mail.FetchAttachment(ctx, svc, *id, mail.FetchOptions{
+		PartID: *part, MaxBytes: *maxBytes, OutPath: *outPath,
+	})
+	if err != nil {
+		return failMailAttachment(err)
+	}
+	return out.Emit(got)
+}
+
+// failMailAttachment reports a fetch failure with the outcomes a bulk caller
+// acts on kept apart: a message that is gone, a part id its stored metadata no
+// longer describes, a part with nothing behind it, an attachment it asked not
+// to be sent, and a local write that failed. Everything else is Gmail's, and
+// Classify separates a rate limit it must wait out from a token a human must
+// re-authorise.
+//
+// Folding any of the first three into MESSAGE_NOT_FOUND would tell a backfill
+// walking months-old metadata to give up on a message that is still there.
+func failMailAttachment(err error) int {
+	switch {
+	case errors.Is(err, mail.ErrPartNotFound):
+		return out.Fail(out.ExitNotFound, "PART_NOT_FOUND", err.Error(), false)
+	case errors.Is(err, mail.ErrAttachmentUnavailable):
+		return out.Fail(out.ExitNotFound, "ATTACHMENT_UNAVAILABLE", err.Error(), false)
+	case errors.Is(err, mail.ErrAttachmentTooLarge):
+		return out.Fail(out.ExitError, "ATTACHMENT_TOO_LARGE", err.Error(), false)
+	case errors.Is(err, mail.ErrOutputWrite):
+		return out.Fail(out.ExitError, "OUTPUT_WRITE_FAILED", err.Error(), false)
+	default:
+		return failMailLookup("MESSAGE_NOT_FOUND", err)
+	}
 }
 
 func cmdMailSend(ctx context.Context, args []string) int {
