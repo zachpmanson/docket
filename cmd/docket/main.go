@@ -313,9 +313,9 @@ func failMailAPI(err error) int {
 
 // failMailLookup is failMailAPI for a command addressing one message or
 // thread, keeping that command's established "not found" code for a genuine
-// 404 while letting every other cause report itself. A rate-limited read
-// answering MESSAGE_NOT_FOUND, as it once did, tells a backfill the message is
-// gone and to stop asking.
+// 404 while letting every other cause report itself. A rate-limited read that
+// answered MESSAGE_NOT_FOUND would tell a backfill the message is gone and to
+// stop asking for it.
 func failMailLookup(notFoundCode string, err error) int {
 	f := mail.Classify(err)
 	if f.Code == mail.CodeNotFound {
@@ -327,8 +327,9 @@ func failMailLookup(notFoundCode string, err error) int {
 // verboseFlag registers --verbose and its deprecated --all alias, returning a
 // getter for the combined value. The flag adds columns to terminal output
 // only — JSON always carries every field — so it does nothing for a
-// programmatic caller. It was named --all, which sitting next to --limit
-// reads as "all results"; that is not, and never was, what it does.
+// programmatic caller. Beside --limit, the name --all reads as "all results",
+// which is not what it selects; it survives as an alias because callers
+// already pass it, and dropping it would fail their next invocation.
 func verboseFlag(fs *flag.FlagSet) func() bool {
 	verbose := fs.Bool("verbose", false,
 		"show threading/cc headers in terminal output (JSON output always includes them)")
@@ -364,7 +365,7 @@ func pageOf(result *mail.ListResult, limit int64) *out.Page {
 }
 
 func cmdMailSearch(ctx context.Context, args []string) int {
-	const usage = "docket mail search --query \"...\" [--limit 25, max 500] " +
+	const usage = "docket mail search --query \"...\" [--limit 25 (max 500)] " +
 		"[--page-token <token>] [--verbose]"
 
 	fs := newFlagSet("mail search")
@@ -403,7 +404,7 @@ func cmdMailSearch(ctx context.Context, args []string) int {
 }
 
 func cmdMailList(ctx context.Context, args []string) int {
-	const usage = "docket mail list --label INBOX [--limit 25, max 500] " +
+	const usage = "docket mail list --label INBOX [--limit 25 (max 500)] " +
 		"[--page-token <token>] [--unread] [--verbose]"
 
 	fs := newFlagSet("mail list")
@@ -454,7 +455,7 @@ func cmdMailList(ctx context.Context, args []string) int {
 }
 
 func cmdMailRead(ctx context.Context, args []string) int {
-	const usage = "docket mail read --id <gm-id> [--max-bytes 20000, or 0 for unlimited] [--verbose]"
+	const usage = "docket mail read --id <gm-id> [--max-bytes 20000 (0 = no cap)] [--verbose]"
 
 	fs := newFlagSet("mail read")
 	id := fs.String("id", "", "Gmail message id, from a search/list/thread result")

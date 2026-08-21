@@ -43,9 +43,9 @@ const (
 // unrecognised error is reported as not retryable: a caller that retries a
 // deterministic failure burns quota and eventually gets rate limited for it,
 // whereas one that declines to retry a transient failure loses a window it
-// can re-run deliberately. Under the opposite default — the blanket
-// retryable=true this replaces — a malformed query or a deleted message looks
-// to a backfill exactly like a rate limit.
+// can re-run deliberately. Under the opposite default, a malformed query or a
+// deleted message reads to a backfill exactly like a rate limit, and it
+// retries against the quota that is already the constraint.
 func Classify(err error) Failure {
 	if err == nil {
 		return Failure{Code: CodeGmailAPIError, Exit: out.ExitError}
