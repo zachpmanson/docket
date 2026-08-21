@@ -54,7 +54,9 @@ type Envelope struct {
 }
 
 // Result is everything a successful command hands to the output layer.
-// Verbose gates only the terminal rendering (see EmitResult).
+// Verbose includes fields tagged `verbose:"…"` in the terminal rendering and
+// nothing more: JSON output always carries every field, so an agent piping
+// output never has to ask for one. Commands expose it as --verbose.
 type Result struct {
 	Data     any
 	Page     *Page
@@ -73,15 +75,6 @@ func IsTTY() bool {
 // See docket-design.md §1 principle 1.
 func Emit(data any, warnings ...string) int {
 	return EmitResult(Result{Data: data, Warnings: warnings})
-}
-
-// EmitVerbose is Emit with the human-readable table/key-value output forced
-// to include verbose fields (struct fields tagged `verbose:"…"`). JSON
-// output is unaffected — verbosity only gates the terminal rendering, so an
-// agent piping to JSON always sees every field. Commands expose this as a
-// --verbose flag.
-func EmitVerbose(data any, warnings ...string) int {
-	return EmitResult(Result{Data: data, Warnings: warnings, Verbose: true})
 }
 
 // EmitResult writes a successful result and returns the process exit code.
