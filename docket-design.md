@@ -200,15 +200,15 @@ not a new one.
 | Search | `users.messages.list` with `q=` accepts native Gmail query syntax directly — no extension needed |
 | Deletion | `users.messages.trash` (moves to Trash label); permanent delete is a separate, far more dangerous call — don't wire it up without a very deliberate `--confirm` story |
 | Identity | `id` and `threadId` from the API response are the stable ids — use these directly, no UID translation needed |
-| Bodies | MIME parts arrive base64url-encoded in `payload.parts`; walk for `text/plain`, fall back to `text/html` converted to text |
+| Bodies | MIME parts arrive base64url-encoded in `payload.parts`; walk for `text/plain`, fall back to `text/html` converted to text; the raw html part is returned alongside on request |
 
 ### Commands
 
 ```
 docket mail search  --query "from:emiel is:unread" [--limit 25] [--page-token <tok>] [--since 7d]
 docket mail list    --label INBOX [--limit 25] [--page-token <tok>] [--unread]
-docket mail read    --id <gm-msgid> [--format text|raw] [--max-bytes 20000|0]
-docket mail thread  --id <gm-thrid>
+docket mail read    --id <gm-msgid> [--max-bytes 20000|0] [--html]
+docket mail thread  --id <gm-thrid> [--html [--max-bytes 20000|0]]
 docket mail send    --to ... --subject ... --body-file - [--confirm]
 docket mail reply   --id <gm-msgid> --body-file - [--confirm]
 docket mail label   --id <gm-msgid> --add Foo --remove INBOX [--confirm]
@@ -241,6 +241,46 @@ with an explicit `"truncated": true` field so the agent knows it didn't see ever
 `--max-bytes 0` disables the cap: truncation cuts from the *end* of a body, which in a forwarded
 trail holds the oldest quoted material, so a caller reading for history needs a way to ask for all
 of it that is not a guessed-large number.
+`--html` adds `body_html` — the `text/html` part byte for byte — and `html_status`, which is
+`present` or `none`. It is an added field rather than a `--format text|html|both` selector
+because the two bodies are not substitutes: a consumer rendering a timeline wants the markup
+to display and the text to index, and a selector makes it choose. Additive also means an
+existing caller's parse is untouched, where `--format` would have every caller reason about
+which fields a mode populates.
+
+Nothing about `body_html` is cleaned or sanitised. A consumer sanitises at render time
+against its own threat model and can inspect its own sanitiser; it cannot inspect ours, and a
+transform applied here is one it cannot undo. The specific loss that motivated the flag is
+link targets: flattening `<a href="…">this review</a>` to text keeps the words and drops the
+URL, unrecoverably for anything already stored.
+
+`html_status` exists because "no html part" is a normal answer that must not look like a
+broken flag. A bool would read false for both, so the field is a string that is absent when
+html was not requested, `none` when the message has no html part (an empty part counts as
+none — there is nothing to render either way, and Gmail does not distinguish them in the
+response), and `present` when `body_html` holds the part.
+
+Part selection: the first `text/plain` part becomes `body` and the first `text/html` part
+becomes `body_html`, at any nesting depth. `multipart/alternative` yields both;
+`multipart/mixed` wrapping an alternative yields the same pair; `multipart/related` yields
+the html part and none of the `image/*` parts it references — inline images are listed under
+`attachments` when they carry a filename, and the markup's `cid:` URLs resolve to nothing
+docket returns.
+
+Character references are resolved where html becomes text, not afterwards. A caller cannot
+do it: unescaping the `body` field would corrupt a `text/plain` part whose author wrote
+`&amp;` meaning those five characters, and only the conversion knows which it is looking at.
+
+`--max-bytes` caps each body independently and `html_truncated` is reported separately from
+`truncated`, because an html part regularly exceeds a cap the same message's text sits under
+and a shared flag would misreport one of them. The html cut is pulled back to after the last
+complete tag and character reference: a body ending mid-tag is not merely short, a parser
+recovering from it swallows everything after the cut into an attribute value.
+
+`thread --html` fetches full format and returns every message's bodies, from the same single
+API call. Envelope-only stays the default because a conversation's worth of bodies is the
+largest response docket can produce.
+
 Attachments are listed as metadata (filename, mime type, size, part id) and fetched only via
 an explicit `mail attachment --part`.
 
