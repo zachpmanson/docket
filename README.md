@@ -289,13 +289,15 @@ A refusal here is `WRITES_DISABLED` / `NOT_OWNED`, exit code 6 — **refused, no
 ## Layout
 
 ```
-cmd/docket/main.go     entrypoint, command registry, flag parsing, write gate
-internal/
+cmd/docket/main.go     thin CLI shell over the gmail library
+ gmail/                  reusable library module (github.com/zachpmanson/docket/gmail)
+  config/              default config.toml embedded into the auth package
   auth/                provider config, PKCE login flow, flock'd token store
   mail/                Gmail REST v1 wrapper, MIME part walking, labels
   cal/                 CalDAV client, RRULE expansion, derived free/busy, find-slot
-  out/                 result envelope, error codes, TTY detection
-config/config.toml     OAuth provider + default_calendar
+  errors/              shared process exit codes
+internal/
+  out/                 result envelope, TTY detection
 flake.nix              devshell: Go toolchain, gopls, golangci-lint
 docket-design.md       design rationale, known limitations, build history
 ```

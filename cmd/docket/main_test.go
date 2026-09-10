@@ -9,7 +9,7 @@ import (
 
 	"google.golang.org/api/googleapi"
 
-	"github.com/zachpmanson/docket/internal/mail"
+	"github.com/zachpmanson/docket/gmail/mail"
 	"github.com/zachpmanson/docket/internal/out"
 )
 

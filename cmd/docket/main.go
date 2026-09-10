@@ -17,9 +17,9 @@ import (
 	"github.com/teambition/rrule-go"
 	"google.golang.org/api/gmail/v1"
 
-	"github.com/zachpmanson/docket/internal/auth"
-	"github.com/zachpmanson/docket/internal/cal"
-	"github.com/zachpmanson/docket/internal/mail"
+	"github.com/zachpmanson/docket/gmail/auth"
+	"github.com/zachpmanson/docket/gmail/cal"
+	"github.com/zachpmanson/docket/gmail/mail"
 	"github.com/zachpmanson/docket/internal/out"
 )
 

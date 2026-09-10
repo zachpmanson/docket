@@ -11,7 +11,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/zachpmanson/docket/config"
+	"github.com/zachpmanson/docket/gmail/config"
 )
 
 // Provider describes an OAuth2 client registration. It is read from config

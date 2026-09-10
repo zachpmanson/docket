@@ -9,17 +9,21 @@ import (
 	"os"
 
 	"golang.org/x/term"
+
+	"github.com/zachpmanson/docket/gmail/errors"
 )
 
-// Exit codes shared across all commands. See docket-design.md §6.
+// The process exit codes live in the gmail library (package errors) so
+// that library consumers and the CLI agree on failure semantics; re-export
+// them here so the rest of the CLI shell can keep writing errors.ExitOK.
 const (
-	ExitOK             = 0
-	ExitError          = 1
-	ExitUsage          = 2
-	ExitAuthRequired   = 3
-	ExitNotFound       = 4
-	ExitRateLimited    = 5
-	ExitConfirmMissing = 6
+	ExitOK             = errors.ExitOK
+	ExitError          = errors.ExitError
+	ExitUsage          = errors.ExitUsage
+	ExitAuthRequired   = errors.ExitAuthRequired
+	ExitNotFound       = errors.ExitNotFound
+	ExitRateLimited    = errors.ExitRateLimited
+	ExitConfirmMissing = errors.ExitConfirmMissing
 )
 
 // Error is the machine-readable error shape carried in a failed Envelope.

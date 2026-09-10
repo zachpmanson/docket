@@ -9,7 +9,7 @@ import (
 	"golang.org/x/oauth2"
 	"google.golang.org/api/googleapi"
 
-	"github.com/zachpmanson/docket/internal/out"
+	exitcode "github.com/zachpmanson/docket/gmail/errors"
 )
 
 // Failure is an API error classified into the three things a caller acts on:
@@ -48,7 +48,7 @@ const (
 // retries against the quota that is already the constraint.
 func Classify(err error) Failure {
 	if err == nil {
-		return Failure{Code: CodeGmailAPIError, Exit: out.ExitError}
+		return Failure{Code: CodeGmailAPIError, Exit: exitcode.ExitError}
 	}
 
 	// Token refresh happens inside the transport, so a refresh failure
@@ -60,9 +60,9 @@ func Classify(err error) Failure {
 	if errors.As(err, &retrieve) {
 		if strings.Contains(string(retrieve.Body), "invalid_grant") ||
 			retrieve.ErrorCode == "invalid_grant" {
-			return Failure{Code: CodeAuthRevoked, Exit: out.ExitAuthRequired, Retryable: false}
+			return Failure{Code: CodeAuthRevoked, Exit: exitcode.ExitAuthRequired, Retryable: false}
 		}
-		return Failure{Code: CodeAuthExpired, Exit: out.ExitAuthRequired, Retryable: true}
+		return Failure{Code: CodeAuthExpired, Exit: exitcode.ExitAuthRequired, Retryable: true}
 	}
 
 	var apiErr *googleapi.Error
@@ -71,15 +71,15 @@ func Classify(err error) Failure {
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return Failure{Code: CodeTimeout, Exit: out.ExitRateLimited, Retryable: true}
+		return Failure{Code: CodeTimeout, Exit: exitcode.ExitRateLimited, Retryable: true}
 	}
 
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		return Failure{Code: CodeNetworkError, Exit: out.ExitRateLimited, Retryable: true}
+		return Failure{Code: CodeNetworkError, Exit: exitcode.ExitRateLimited, Retryable: true}
 	}
 
-	return Failure{Code: CodeGmailAPIError, Exit: out.ExitError, Retryable: false}
+	return Failure{Code: CodeGmailAPIError, Exit: exitcode.ExitError, Retryable: false}
 }
 
 // rateLimitReasons are the googleapi error reasons Gmail returns under a 403
@@ -97,19 +97,19 @@ var rateLimitReasons = map[string]bool{
 func classifyHTTP(err *googleapi.Error) Failure {
 	switch {
 	case err.Code == 429:
-		return Failure{Code: CodeRateLimited, Exit: out.ExitRateLimited, Retryable: true}
+		return Failure{Code: CodeRateLimited, Exit: exitcode.ExitRateLimited, Retryable: true}
 	case err.Code == 401:
-		return Failure{Code: CodeAuthExpired, Exit: out.ExitAuthRequired, Retryable: true}
+		return Failure{Code: CodeAuthExpired, Exit: exitcode.ExitAuthRequired, Retryable: true}
 	case err.Code == 403 && hasRateLimitReason(err):
-		return Failure{Code: CodeRateLimited, Exit: out.ExitRateLimited, Retryable: true}
+		return Failure{Code: CodeRateLimited, Exit: exitcode.ExitRateLimited, Retryable: true}
 	case err.Code == 403:
-		return Failure{Code: CodePermission, Exit: out.ExitError, Retryable: false}
+		return Failure{Code: CodePermission, Exit: exitcode.ExitError, Retryable: false}
 	case err.Code == 404:
-		return Failure{Code: CodeNotFound, Exit: out.ExitNotFound, Retryable: false}
+		return Failure{Code: CodeNotFound, Exit: exitcode.ExitNotFound, Retryable: false}
 	case err.Code >= 500:
-		return Failure{Code: CodeServerError, Exit: out.ExitRateLimited, Retryable: true}
+		return Failure{Code: CodeServerError, Exit: exitcode.ExitRateLimited, Retryable: true}
 	default:
-		return Failure{Code: CodeGmailAPIError, Exit: out.ExitError, Retryable: false}
+		return Failure{Code: CodeGmailAPIError, Exit: exitcode.ExitError, Retryable: false}
 	}
 }
 
