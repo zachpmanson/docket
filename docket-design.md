@@ -49,15 +49,22 @@ Two bugs an audit of every command's usage/error string caught, both fixed:
 
 ```
 flake.nix         devshell: Go toolchain, gofmt/golangci-lint, gopls
-cmd/docket/main.go
+cmd/docket/main.go  thin CLI shell over the gmail library. See below.
+gmail/            reusable library module (github.com/zachpmanson/docket/gmail)
+  config/         default config.toml embedded into the auth package
+  auth/           provider config, PKCE flow, token store
+  mail/           Gmail REST v1 wrapper, MIME part walking
+  cal/            CalDAV client, RRULE expansion, derived free/busy
+  errors/         shared process exit codes
 internal/
-  auth/       provider config, PKCE flow, token store
-  mail/       Gmail REST v1 wrapper, MIME part walking
-  cal/        CalDAV client, RRULE expansion, derived free/busy
-  out/        result envelope, error codes, TTY detection
-  schema/     command registry → JSON Schema / MCP tool defs
-  cache/      optional SQLite envelope index (phase 4)
+  out/            result envelope, TTY detection
 ```
+
+The gmail library is a nested Go module (`gmail/go.mod`, module
+`github.com/zachpmanson/docket/gmail`) so other projects can depend on
+it as a versioned package. The root module requires it and overrides it
+with a local `replace`, keeping the monorepo self-building; a consumer
+does the same with a git version instead.
 
 ---
 
@@ -220,7 +227,7 @@ docket mail label   --id <gm-msgid> --add Foo --remove INBOX [--confirm]
 plus the threading headers (`message_id`, `in_reply_to`, `references`) needed to reconstruct reply
 edges without inferring them from quoted bodies. Bodies are expensive and blow the context window;
 make the agent ask for them. (The envelope package has an internal namesake; these are the
-`mail.Envelope` fields — see `internal/mail/types.go`.)
+`mail.Envelope` fields — see `gmail/mail/types.go`.)
 
 The threading/cc fields are always present in JSON output (the agent-facing form), but hidden from
 the human-readable terminal table by default — pass `--verbose` on `search`/`list`/`read`/`thread`/

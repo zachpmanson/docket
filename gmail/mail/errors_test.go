@@ -10,7 +10,7 @@ import (
 	"golang.org/x/oauth2"
 	"google.golang.org/api/googleapi"
 
-	"github.com/zachpmanson/docket/internal/out"
+	exitcode "github.com/zachpmanson/docket/gmail/errors"
 )
 
 type fakeTimeout struct{}
@@ -30,80 +30,80 @@ func TestClassify(t *testing.T) {
 		name:      "429 is the rate limit a backfill must back off from",
 		err:       &googleapi.Error{Code: 429, Message: "Too Many Requests"},
 		code:      CodeRateLimited,
-		exit:      out.ExitRateLimited,
+		exit:      exitcode.ExitRateLimited,
 		retryable: true,
 	}, {
 		name:      "403 with a quota reason is a rate limit, not a permission failure",
 		err:       &googleapi.Error{Code: 403, Errors: []googleapi.ErrorItem{{Reason: "userRateLimitExceeded"}}},
 		code:      CodeRateLimited,
-		exit:      out.ExitRateLimited,
+		exit:      exitcode.ExitRateLimited,
 		retryable: true,
 	}, {
 		name:      "403 with no reason but rate-limit wording is still a rate limit",
 		err:       &googleapi.Error{Code: 403, Message: "User-rate limit exceeded"},
 		code:      CodeRateLimited,
-		exit:      out.ExitRateLimited,
+		exit:      exitcode.ExitRateLimited,
 		retryable: true,
 	}, {
 		name: "403 on a missing scope will never succeed on retry",
 		err: &googleapi.Error{Code: 403, Message: "Request had insufficient authentication scopes",
 			Errors: []googleapi.ErrorItem{{Reason: "insufficientPermissions"}}},
 		code:      CodePermission,
-		exit:      out.ExitError,
+		exit:      exitcode.ExitError,
 		retryable: false,
 	}, {
 		name:      "401 is worth one more attempt because the transport may refresh",
 		err:       &googleapi.Error{Code: 401, Message: "Invalid Credentials"},
 		code:      CodeAuthExpired,
-		exit:      out.ExitAuthRequired,
+		exit:      exitcode.ExitAuthRequired,
 		retryable: true,
 	}, {
 		name:      "404 is a gone message",
 		err:       &googleapi.Error{Code: 404, Message: "Not Found"},
 		code:      CodeNotFound,
-		exit:      out.ExitNotFound,
+		exit:      exitcode.ExitNotFound,
 		retryable: false,
 	}, {
 		name:      "5xx is transient",
 		err:       &googleapi.Error{Code: 503, Message: "Backend Error"},
 		code:      CodeServerError,
-		exit:      out.ExitRateLimited,
+		exit:      exitcode.ExitRateLimited,
 		retryable: true,
 	}, {
 		name:      "a wrapped API error is still classified",
 		err:       fmt.Errorf("listing messages: %w", &googleapi.Error{Code: 429}),
 		code:      CodeRateLimited,
-		exit:      out.ExitRateLimited,
+		exit:      exitcode.ExitRateLimited,
 		retryable: true,
 	}, {
 		name:      "a dead refresh token needs a human, not a retry",
 		err:       &oauth2.RetrieveError{ErrorCode: "invalid_grant", Body: []byte(`{"error":"invalid_grant"}`)},
 		code:      CodeAuthRevoked,
-		exit:      out.ExitAuthRequired,
+		exit:      exitcode.ExitAuthRequired,
 		retryable: false,
 	}, {
 		name:      "a failed refresh for any other reason is retryable",
 		err:       &oauth2.RetrieveError{Body: []byte(`{"error":"temporarily_unavailable"}`)},
 		code:      CodeAuthExpired,
-		exit:      out.ExitAuthRequired,
+		exit:      exitcode.ExitAuthRequired,
 		retryable: true,
 	}, {
 		name:      "a network timeout is transient",
 		err:       fmt.Errorf("Get https://gmail.googleapis.com: %w", net.Error(fakeTimeout{})),
 		code:      CodeNetworkError,
-		exit:      out.ExitRateLimited,
+		exit:      exitcode.ExitRateLimited,
 		retryable: true,
 	}, {
 		name:      "a cancelled context is transient",
 		err:       fmt.Errorf("fetching message: %w", context.DeadlineExceeded),
 		code:      CodeTimeout,
-		exit:      out.ExitRateLimited,
+		exit:      exitcode.ExitRateLimited,
 		retryable: true,
 	}, {
 		name:      "an unrecognised error does not claim to be retryable",
 		err:       errors.New("something we have never seen"),
 		code:      CodeGmailAPIError,
-		exit:      out.ExitError,
+		exit:      exitcode.ExitError,
 		retryable: false,
 	}}
 

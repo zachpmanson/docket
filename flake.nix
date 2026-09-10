@@ -16,7 +16,11 @@
           pname = "docket";
           version = "0.1.0";
           src = ./.;
-          vendorHash = "sha256-9+jYyNOePa1N4nfVe/MsS0DcPvVwX2gry6WVQjAufvE=";
+          vendorHash = "sha256-DYn70cyQUTfVHPz13YlyDZIMarlGmjEAC/BbcAjirkU=";
+          # gmail/ is a nested Go module (own go.mod) consumed via the
+          # root module's replace; buildGoModule's per-directory build
+          # loop must not treat it as subpackages of the root.
+          excludedPackages = [ "gmail" ];
           # The suite is hermetic — the Gmail client is driven through its
           # endpoint against an in-process fake — so it is safe to run in a
           # sandboxed build with no network.
