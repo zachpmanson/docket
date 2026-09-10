@@ -135,6 +135,15 @@ Then open the URL in the laptop browser; the redirect tunnels back to the listen
 Also implement `docket auth import --token-file -` so you can run the flow on your laptop
 and pipe the resulting token to the server. Refresh tokens aren't machine-bound.
 
+A process that already serves HTTP (an embedded server) hosts the callback itself instead
+of the CLI listener: call `BeginLogin(provider, redirectURI)` to obtain the authorization
+URL + a `Pending` (state to verify, verifier to exchange), send the user to
+`AuthURL()`, match the callback's `state=` against `Pending.State`, then
+`ExchangeCode(ctx, pending, code)` and persist with `SaveToken`. For the Thunderbird
+client the redirect URI must stay a pathless `http://localhost:<port>` (Google matches
+loopback redirects by host+port). `docket auth login` is the same flow wrapped around a
+temporary `:8080` listener.
+
 Request `access_type=offline` and `prompt=consent`. Without the latter you won't get a
 refresh token on re-authorization, which produces a token that mysteriously dies after an hour.
 
