@@ -4,13 +4,30 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"mime"
 	"net/mail"
+	"slices"
 	"strings"
 
 	"google.golang.org/api/gmail/v1"
 )
+
+// Body is what a message says, in the two forms it can be sent in. Text is the
+// message and is required — it is the part every client can read, and the one a
+// transcript shows. HTML is the same words marked up for a client that renders
+// them, and empty means the message goes out as text/plain alone.
+//
+// Both are the caller's, in this package's usual division: something that knows
+// what the message says decides how it is written, and docket decides how it is
+// carried. Nothing here converts one into the other — a caller that wants both
+// forms must build both, so the two parts of a single message can never
+// disagree about what it says.
+type Body struct {
+	Text string
+	HTML string
+}
 
 // SendPlan is a fully-resolved, ready-to-send message. Building one never
 // mutates anything — it's safe to construct and show as a --dry-run
@@ -21,11 +38,15 @@ import (
 // not a knob: both fields are assembled here from the message being answered,
 // and neither has a caller-supplied form — that is what makes a plan
 // reviewable, since the addresses it shows are the addresses it uses.
+//
+// Body is the plain-text part and HTML the alternative beside it, empty when the
+// message is text alone (see buildRawMessage).
 type SendPlan struct {
 	To      string `json:"to"`
 	Cc      string `json:"cc,omitempty"`
 	Subject string `json:"subject"`
 	Body    string `json:"body"`
+	HTML    string `json:"html,omitempty"`
 
 	raw      string
 	threadID string
@@ -33,24 +54,26 @@ type SendPlan struct {
 
 // PrepareSend validates a send request and builds the raw RFC 5322 message,
 // without sending anything.
-func PrepareSend(to, subject, body string) (*SendPlan, error) {
+func PrepareSend(to, subject string, body Body) (*SendPlan, error) {
 	if _, err := mail.ParseAddressList(to); err != nil {
 		return nil, fmt.Errorf(
 			"--to %q is not a valid address list: %w (expected e.g. \"a@example.com\" "+
 				"or \"a@example.com, b@example.com\")", to, err)
 	}
-	raw, err := buildRawMessage(rawMessageOptions{To: to, Subject: subject, Body: body})
+	raw, err := buildRawMessage(rawMessageOptions{
+		To: to, Subject: subject, Body: body.Text, HTML: body.HTML,
+	})
 	if err != nil {
 		return nil, err
 	}
-	return &SendPlan{To: to, Subject: subject, Body: body, raw: raw}, nil
+	return &SendPlan{To: to, Subject: subject, Body: body.Text, HTML: body.HTML, raw: raw}, nil
 }
 
 // PrepareReply fetches the message being replied to (a read-only call) and
 // builds a threaded raw message (In-Reply-To/References + Gmail's
 // ThreadId), without sending anything. It answers the sender alone; see
 // PrepareReplyAll for everyone the message reached.
-func PrepareReply(ctx context.Context, svc *gmail.Service, id, body string) (*SendPlan, error) {
+func PrepareReply(ctx context.Context, svc *gmail.Service, id string, body Body) (*SendPlan, error) {
 	return prepareReply(ctx, svc, id, body, false)
 }
 
@@ -63,14 +86,14 @@ func PrepareReply(ctx context.Context, svc *gmail.Service, id, body string) (*Se
 // make and a caller cannot: which of the addresses on a message are the ones
 // reading it. A caller assembling this itself would be asking a second question
 // (who am I?) that only the account can answer.
-func PrepareReplyAll(ctx context.Context, svc *gmail.Service, id, body string) (*SendPlan, error) {
+func PrepareReplyAll(ctx context.Context, svc *gmail.Service, id string, body Body) (*SendPlan, error) {
 	return prepareReply(ctx, svc, id, body, true)
 }
 
 // prepareReply is the one path both replies take, so reply-all cannot drift
 // from reply in threading, subject, or body: the only difference is who is on
 // the message.
-func prepareReply(ctx context.Context, svc *gmail.Service, id, body string, all bool) (*SendPlan, error) {
+func prepareReply(ctx context.Context, svc *gmail.Service, id string, body Body, all bool) (*SendPlan, error) {
 	original, err := svc.Users.Messages.Get(meUser, id).
 		Format("metadata").
 		MetadataHeaders("Message-Id", "References", "Subject", "From", "Reply-To", "To", "Cc").
@@ -100,7 +123,7 @@ func prepareReply(ctx context.Context, svc *gmail.Service, id, body string, all 
 	}
 
 	raw, err := buildRawMessage(rawMessageOptions{
-		To: to, Cc: cc, Subject: subject, Body: body,
+		To: to, Cc: cc, Subject: subject, Body: body.Text, HTML: body.HTML,
 		InReplyTo: messageID, References: references,
 	})
 	if err != nil {
@@ -108,7 +131,7 @@ func prepareReply(ctx context.Context, svc *gmail.Service, id, body string, all 
 	}
 
 	return &SendPlan{
-		To: to, Cc: cc, Subject: subject, Body: body,
+		To: to, Cc: cc, Subject: subject, Body: body.Text, HTML: body.HTML,
 		raw: raw, threadID: original.ThreadId,
 	}, nil
 }
@@ -415,6 +438,7 @@ func fetchEnvelope(ctx context.Context, svc *gmail.Service, labels *LabelCache, 
 
 type rawMessageOptions struct {
 	To, Cc, Subject, Body string
+	HTML                  string
 	InReplyTo, References string
 }
 
@@ -424,6 +448,13 @@ type rawMessageOptions struct {
 // built from somebody else's header is the one place a newline could become a
 // new header, and "no CR or LF survives into this message" is a property worth
 // holding here rather than inheriting from a quoter somewhere else.
+//
+// With no HTML the message is one text/plain part, exactly as it has always been.
+// With it the message is multipart/alternative: the same message twice, plain
+// first and HTML second, which is the order the format requires — the parts run
+// from the plainest to the richest, and a client that understands both takes the
+// last one it can read. The two are written as they were handed in; nothing here
+// converts one into the other, so the parts cannot say different things.
 func buildRawMessage(o rawMessageOptions) (string, error) {
 	var buf bytes.Buffer
 	set := func(name, value string) error {
@@ -455,9 +486,52 @@ func buildRawMessage(o rawMessageOptions) (string, error) {
 		}
 	}
 	buf.WriteString("MIME-Version: 1.0\r\n")
-	buf.WriteString("Content-Type: text/plain; charset=\"UTF-8\"\r\n")
+
+	if o.HTML == "" {
+		buf.WriteString("Content-Type: text/plain; charset=\"UTF-8\"\r\n")
+		buf.WriteString("\r\n")
+		buf.WriteString(o.Body)
+		return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(buf.Bytes()), nil
+	}
+
+	boundary, err := messageBoundary(o.Body, o.HTML)
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(&buf, "Content-Type: multipart/alternative; boundary=%q\r\n", boundary)
 	buf.WriteString("\r\n")
-	buf.WriteString(o.Body)
+	// The delimiter goes at the start of its own line, so each part is separated
+	// from the next by a CRLF that belongs to the framing rather than to the text —
+	// a body already ending in one would otherwise leave a blank line inside the
+	// part that nobody wrote.
+	for _, part := range []struct{ kind, text string }{
+		{"text/plain", o.Body},
+		{"text/html", o.HTML},
+	} {
+		fmt.Fprintf(&buf, "--%s\r\n", boundary)
+		fmt.Fprintf(&buf, "Content-Type: %s; charset=\"UTF-8\"\r\n", part.kind)
+		buf.WriteString("\r\n")
+		buf.WriteString(strings.TrimRight(part.text, "\r\n"))
+		buf.WriteString("\r\n")
+	}
+	fmt.Fprintf(&buf, "--%s--\r\n", boundary)
 
 	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(buf.Bytes()), nil
+}
+
+// messageBoundary picks the token that separates the parts, and it is the one
+// place a multipart message can be broken by its own content: a boundary that
+// occurs inside a part ends that part early. There is no token that cannot
+// occur in text somebody wrote, so the one chosen is the first of a numbered
+// family that does not occur in either part as handed in.
+func messageBoundary(parts ...string) (string, error) {
+	for i := 0; i < 100; i++ {
+		candidate := fmt.Sprintf("=_docket_%d_=", i)
+		if !slices.ContainsFunc(parts, func(p string) bool { return strings.Contains(p, candidate) }) {
+			return candidate, nil
+		}
+	}
+	return "", errors.New(
+		"could not find a MIME boundary that does not occur in the message: " +
+			"every candidate this builds is inside the body")
 }

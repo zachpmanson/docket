@@ -52,7 +52,7 @@ func TestReplyAnswersTheSenderAlone(t *testing.T) {
 		hdr("Cc", "carl@example.net"),
 		hdr("Subject", "quarterly widget audit"),
 	)
-	plan, err := PrepareReply(context.Background(), svc, "m1", "thanks")
+	plan, err := PrepareReply(context.Background(), svc, "m1", Body{Text: "thanks"})
 	if err != nil {
 		t.Fatalf("preparing the reply: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestReplyAnswersAReplyToRatherThanTheSender(t *testing.T) {
 		hdr("To", "widgets@lists.example.org"),
 		hdr("Subject", "Re: quarterly widget audit"),
 	)
-	plan, err := PrepareReply(context.Background(), svc, "m1", "unsubscribe me")
+	plan, err := PrepareReply(context.Background(), svc, "m1", Body{Text: "unsubscribe me"})
 	if err != nil {
 		t.Fatalf("preparing the reply: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestReplyAnswersAReplyToRatherThanTheSender(t *testing.T) {
 
 	// And reply-all keeps it there rather than adding the sender back: the
 	// Reply-To is the sender's own answer about where answers go.
-	all, err := PrepareReplyAll(context.Background(), svc, "m1", "unsubscribe me")
+	all, err := PrepareReplyAll(context.Background(), svc, "m1", Body{Text: "unsubscribe me"})
 	if err != nil {
 		t.Fatalf("preparing the reply-all: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestReplyAllKeepsTheAudience(t *testing.T) {
 		hdr("Cc", "carl@example.net, OPS@example.org"),
 		hdr("Subject", "quarterly widget audit"),
 	)
-	plan, err := PrepareReplyAll(context.Background(), svc, "m1", "noted")
+	plan, err := PrepareReplyAll(context.Background(), svc, "m1", Body{Text: "noted"})
 	if err != nil {
 		t.Fatalf("preparing the reply-all: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestReplyAllDropsEveryAddressTheMailboxOwns(t *testing.T) {
 		hdr("Cc", "reader@example.com"),
 		hdr("Subject", "quarterly widget audit"),
 	}
-	plan, err := PrepareReplyAll(context.Background(), f.service(t), "m1", "noted")
+	plan, err := PrepareReplyAll(context.Background(), f.service(t), "m1", Body{Text: "noted"})
 	if err != nil {
 		t.Fatalf("preparing the reply-all: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestReplyAllPromotesARecepientWhenTheSenderIsYou(t *testing.T) {
 		hdr("Cc", "ops@example.org"),
 		hdr("Subject", "quarterly widget audit"),
 	)
-	plan, err := PrepareReplyAll(context.Background(), svc, "m1", "following up")
+	plan, err := PrepareReplyAll(context.Background(), svc, "m1", Body{Text: "following up"})
 	if err != nil {
 		t.Fatalf("preparing the reply-all: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestReplyAllRefusesAMessageOnlyThisMailboxIsOn(t *testing.T) {
 		hdr("To", "reader@example.com"),
 		hdr("Subject", "note to self"),
 	)
-	_, err := PrepareReplyAll(context.Background(), svc, "m1", "and again")
+	_, err := PrepareReplyAll(context.Background(), svc, "m1", Body{Text: "and again"})
 	if err == nil {
 		t.Fatal("a reply-all with nobody but this mailbox on it was prepared")
 	}
@@ -212,7 +212,7 @@ func TestReplyAllRefusesAHeaderItCannotRead(t *testing.T) {
 		hdr("To", "the whole ops team"),
 		hdr("Subject", "quarterly widget audit"),
 	)
-	_, err := PrepareReplyAll(context.Background(), svc, "m1", "noted")
+	_, err := PrepareReplyAll(context.Background(), svc, "m1", Body{Text: "noted"})
 	if err == nil {
 		t.Fatal("an unparsable To header was accepted")
 	}
@@ -239,7 +239,7 @@ func TestReplyAllRefusesToGuessWhoTheReaderIs(t *testing.T) {
 				hdr("To", "reader@example.com"),
 			}
 			tc.set(f)
-			_, err := PrepareReplyAll(context.Background(), f.service(t), "m1", "noted")
+			_, err := PrepareReplyAll(context.Background(), f.service(t), "m1", Body{Text: "noted"})
 			if err == nil {
 				t.Fatal("a reply-all was prepared without knowing the mailbox's own addresses")
 			}
@@ -259,7 +259,7 @@ func TestReplyKeepsADisplayNameReadable(t *testing.T) {
 		hdr("To", "reader@example.com"),
 		hdr("Subject", "quarterly widget audit"),
 	)
-	plan, err := PrepareReply(context.Background(), svc, "m1", "thanks")
+	plan, err := PrepareReply(context.Background(), svc, "m1", Body{Text: "thanks"})
 	if err != nil {
 		t.Fatalf("preparing the reply: %v", err)
 	}
@@ -307,10 +307,10 @@ func TestBuildRawMessageRefusesALineBreakInAHeader(t *testing.T) {
 }
 
 func TestPrepareSendStillChecksTheRecipients(t *testing.T) {
-	if _, err := PrepareSend("not an address", "hi", "body"); err == nil {
+	if _, err := PrepareSend("not an address", "hi", Body{Text: "body"}); err == nil {
 		t.Fatal("PrepareSend accepted a recipient that is not an address")
 	}
-	plan, err := PrepareSend("Dana Okafor <dana@example.com>", "hi", "body")
+	plan, err := PrepareSend("Dana Okafor <dana@example.com>", "hi", Body{Text: "body"})
 	if err != nil {
 		t.Fatalf("preparing a send: %v", err)
 	}
@@ -319,4 +319,91 @@ func TestPrepareSendStillChecksTheRecipients(t *testing.T) {
 	if plan.To != "Dana Okafor <dana@example.com>" || plan.Cc != "" {
 		t.Errorf("To/Cc = %q/%q", plan.To, plan.Cc)
 	}
+}
+
+func TestAMessageWithHTMLIsTwoAlternativeParts(t *testing.T) {
+	plan, err := PrepareSend("dana@example.com", "hi", Body{
+		Text: "the plain one",
+		HTML: "<div>the html one</div>",
+	})
+	if err != nil {
+		t.Fatalf("preparing the send: %v", err)
+	}
+	// The plan shows both forms, so a preview of a message that will go out as
+	// two parts shows the two parts rather than one of them.
+	if plan.Body != "the plain one" || plan.HTML != "<div>the html one</div>" {
+		t.Errorf("the plan's bodies = %q/%q", plan.Body, plan.HTML)
+	}
+
+	msg := raw(t, plan)
+	if !strings.Contains(msg, "Content-Type: multipart/alternative; boundary=\"=_docket_0_=\"") {
+		t.Errorf("the message is not multipart/alternative:\n%s", msg)
+	}
+	// The header block ends where the body begins, and the framing is the only
+	// thing between the parts.
+	head, body, found := strings.Cut(msg, "\r\n\r\n")
+	if !found {
+		t.Fatalf("no header/body split:\n%s", msg)
+	}
+	if strings.Contains(head, "text/plain") {
+		t.Errorf("a multipart has no top-level content type of its own:\n%s", head)
+	}
+	want := "--=_docket_0_=\r\n" +
+		"Content-Type: text/plain; charset=\"UTF-8\"\r\n" +
+		"\r\n" +
+		"the plain one\r\n" +
+		"--=_docket_0_=\r\n" +
+		"Content-Type: text/html; charset=\"UTF-8\"\r\n" +
+		"\r\n" +
+		"<div>the html one</div>\r\n" +
+		"--=_docket_0_=--\r\n"
+	if body != want {
+		t.Errorf("the parts are not as expected:\ngot:\n%q\nwant:\n%q", body, want)
+	}
+}
+
+func TestThePartsAreSeparatedByCRLFRatherThanByTheText(t *testing.T) {
+	// A body that already ends in a line break is the ordinary case — a caller
+	// quoting a message hands in text ending in one — and the framing must not
+	// turn it into a blank line inside the part.
+	one := raw(t, mustSend(t, Body{Text: "line\n", HTML: "<div>line</div>\n"}))
+	two := raw(t, mustSend(t, Body{Text: "line", HTML: "<div>line</div>"}))
+	if one != two {
+		t.Errorf("a trailing line break changed the message:\n%q\n%q", one, two)
+	}
+	if strings.Contains(one, "\n\n\n") {
+		t.Errorf("a blank line was left inside a part:\n%q", one)
+	}
+	// And a text-only message is still one part, byte for byte as before.
+	plain := raw(t, mustSend(t, Body{Text: "line"}))
+	if strings.Contains(plain, "multipart") || strings.Count(plain, "Content-Type") != 1 {
+		t.Errorf("a body without HTML is not a single part:\n%s", plain)
+	}
+}
+
+func TestTheBoundaryIsNotSomethingTheMessageContains(t *testing.T) {
+	// A boundary occurring inside a part ends it there, so the token is chosen
+	// against the text rather than assumed to be absent from it — the message
+	// here is the one that contains the first candidate.
+	msg := raw(t, mustSend(t, Body{
+		Text: "what does =_docket_0_= mean",
+		HTML: "<div>and =_docket_1_= too</div>",
+	}))
+	if !strings.Contains(msg, "Content-Type: multipart/alternative; boundary=\"=_docket_2_=\"") {
+		t.Errorf("the boundary was not moved past the text:\n%s", msg)
+	}
+	if strings.Count(msg, "--=_docket_2_=") != 3 {
+		t.Errorf("the chosen boundary is not the only one framing the parts:\n%s", msg)
+	}
+}
+
+// mustSend is the plan a send builds, or a failed test: the assertions above are
+// about the bytes, and a plan that could not be built has none.
+func mustSend(t *testing.T, body Body) *SendPlan {
+	t.Helper()
+	plan, err := PrepareSend("dana@example.com", "hi", body)
+	if err != nil {
+		t.Fatalf("preparing the send: %v", err)
+	}
+	return plan
 }

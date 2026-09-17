@@ -629,7 +629,7 @@ func cmdMailSend(ctx context.Context, args []string) int {
 		return code
 	}
 
-	plan, err := mail.PrepareSend(*to, *subject, body)
+	plan, err := mail.PrepareSend(*to, *subject, mail.Body{Text: body})
 	if err != nil {
 		return usageError(err.Error(), "docket mail send --to ... --subject ... --body-file - [--confirm]")
 	}
@@ -679,7 +679,7 @@ func cmdMailReply(ctx context.Context, args []string) int {
 	if *replyAll {
 		prepare = mail.PrepareReplyAll
 	}
-	plan, err := prepare(ctx, svc, *id, body)
+	plan, err := prepare(ctx, svc, *id, mail.Body{Text: body})
 	if err != nil {
 		return failMailLookup("MESSAGE_NOT_FOUND", err)
 	}

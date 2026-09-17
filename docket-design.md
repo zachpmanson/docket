@@ -342,6 +342,23 @@ original did. `dry-run` prints the whole plan, `To` and `Cc` included, which is 
 truncation — a half-written binary is corrupt in a way nothing downstream can detect — and it
 is checked against the metadata size before the content call, so refusing is cheap.
 
+### What a message docket sends is made of
+
+A send is `mail.Body`: the plain text, and optionally the same words as HTML —
+written as two parts of one `multipart/alternative` when the HTML is set, and as a single
+`text/plain` part, byte for byte as it has always been, when it is empty. Plain first and HTML
+second is the order the format requires (parts run from the plainest to the richest, and a
+client takes the last one it can read), and each part is written exactly as it was handed in:
+**docket does not convert one form into the other.** A caller that wants both builds both —
+chainmail does, from the same words and the same quote, so the two parts of one reply cannot
+disagree about what it says.
+
+The boundary is the one place a multipart message can be broken by its own content, since a
+boundary occurring inside a part ends it there. It is chosen against the text rather than
+assumed absent from it. The framing's line breaks belong to the framing: each part is trimmed
+of trailing line breaks before its delimiter, so a body that already ended in one does not
+leave a blank line inside a part nobody wrote.
+
 A fetch that comes back with nothing reports which nothing it was: `MESSAGE_NOT_FOUND`,
 `PART_NOT_FOUND`, `ATTACHMENT_UNAVAILABLE`, or `OUTPUT_WRITE_FAILED`, with rate limits still
 `RATE_LIMITED`/exit 5/retryable. A consumer walking months-old metadata hits all of these as
