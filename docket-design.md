@@ -327,10 +327,17 @@ the mailbox doing the replying is never a recipient.** That means `users.getProf
 answers is usually addressed to a *send-as alias* rather than to the account's own name, which
 is exactly the address a caller-supplied list would miss and CC them on their own
 correspondence. Both reads live inside `https://mail.google.com/`, the grant docket already
-runs on, so reply-all asks for no new consent. Removing the mailbox from `To` can empty it —
-answering a message you sent yourself — and then the first of the remaining recipients is
-promoted into `To`, because a message needs one and replying to yourself is not the
-alternative.
+runs on, so reply-all asks for no new consent.
+
+Removing the mailbox from `To` can empty it, and two things follow. **Answering a message you
+sent**: the first of the remaining recipients is promoted into `To`, because a message needs
+one. **Answering a message whose whole audience is the mailbox** — a note to self, or two of the
+reader's own addresses in one thread — leaves nothing to promote, so the sender comes back on to
+the reply (added 2026-09-18): replying to yourself is what such a message is *for*, and the
+sender is the only reader this package can name without inventing an address. Refusing was the
+earlier answer and it was wrong: it told a reader who wanted to add a line to their own thread
+that the box would not let them, which no other mail client does. The rest of the audience stays
+off either way — the reply goes to the address that wrote, not to every alias the reader owns.
 
 Recipients are re-serialised from parsed addresses rather than copied across as header text, so
 a display name keeps its name and a header cannot smuggle a second one; a header that is

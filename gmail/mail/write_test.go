@@ -189,18 +189,53 @@ func TestReplyAllPromotesARecepientWhenTheSenderIsYou(t *testing.T) {
 	}
 }
 
-func TestReplyAllRefusesAMessageOnlyThisMailboxIsOn(t *testing.T) {
+func TestReplyAllAnswersTheReaderWhenTheWholeAudienceIsTheirs(t *testing.T) {
+	// A note to self: taking the reader off the audience leaves nobody, and the
+	// sender comes back rather than the reply being refused. Answering yourself is
+	// what a reply to such a message means, and it is the only address in it.
 	svc := replyFixture(t,
-		hdr("From", "reader@example.com"),
+		hdr("From", "Zach Manson <reader@example.com>"),
 		hdr("To", "reader@example.com"),
 		hdr("Subject", "note to self"),
 	)
-	_, err := PrepareReplyAll(context.Background(), svc, "m1", Body{Text: "and again"})
-	if err == nil {
-		t.Fatal("a reply-all with nobody but this mailbox on it was prepared")
+	plan, err := PrepareReplyAll(context.Background(), svc, "m1", Body{Text: "and again"})
+	if err != nil {
+		t.Fatalf("preparing the reply-all: %v", err)
 	}
-	if !strings.Contains(err.Error(), "nobody to reply to") {
-		t.Errorf("the error does not say what is wrong: %v", err)
+	if plan.To != "Zach Manson <reader@example.com>" {
+		t.Errorf("To = %q, want the sender, name and all", plan.To)
+	}
+	if plan.Cc != "" {
+		t.Errorf("Cc = %q, want empty", plan.Cc)
+	}
+	// And it is the message on the wire, not just the summary of one.
+	if got := raw(t, plan); !strings.Contains(got, "To: Zach Manson <reader@example.com>\r\n") {
+		t.Errorf("the raw message does not carry the To:\n%s", got)
+	}
+}
+
+func TestReplyAllAnswersTheAddressThatWroteWhenTheRestIsYoursToo(t *testing.T) {
+	// The reader's own address writing to another of their own addresses. The
+	// fallback is about there being nobody but the reader, not about putting the
+	// reader's addresses back on the reply: the answer goes to the one that wrote.
+	f := newFakeGmail(t, map[string]listPage{})
+	f.bodies["m1"] = "the message being answered"
+	f.profile = "reader@example.com"
+	f.sendAs = []string{"other@example.com"}
+	f.headers["m1"] = []*gmail.MessagePartHeader{
+		hdr("From", "Zach Manson <reader@example.com>"),
+		hdr("To", "other@example.com"),
+		hdr("Subject", "note to self, sort of"),
+	}
+	plan, err := PrepareReplyAll(context.Background(), f.service(t), "m1", Body{Text: "and again"})
+	if err != nil {
+		t.Fatalf("preparing the reply-all: %v", err)
+	}
+	if plan.To != "Zach Manson <reader@example.com>" {
+		t.Errorf("To = %q, want the address that wrote", plan.To)
+	}
+	if plan.Cc != "" {
+		t.Errorf("Cc = %q, want empty — an alias of the reader's is not a recipient", plan.Cc)
 	}
 }
 
