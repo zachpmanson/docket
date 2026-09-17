@@ -102,7 +102,7 @@ Verify with `docket auth whoami`.
 | `mail thread --id <gm-thrid>` | Read a whole conversation (envelopes only unless `--html`) |
 | `mail attachment --id <gm-msgid> --part <part-id> --out <path>` | Write one attachment's bytes to a file |
 | `mail send --to ... --subject ... --body-file -` | Send (mutating: `--confirm`) |
-| `mail reply --id <gm-msgid> --body-file -` | Reply (mutating: `--confirm`) |
+| `mail reply --id <gm-msgid> --body-file -` | Reply (mutating: `--confirm`); `--reply-all` answers everyone the message was addressed to |
 | `mail label --id <gm-msgid> --add Foo --remove INBOX` | Apply/remove labels (mutating: `--confirm`) |
 
 `search`/`list` return envelopes only (id, thread id, from/to, subject, date, labels,

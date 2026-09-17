@@ -654,19 +654,20 @@ func cmdMailReply(ctx context.Context, args []string) int {
 	fs := newFlagSet("mail reply")
 	id := fs.String("id", "", "id of the message being replied to")
 	bodyFile := fs.String("body-file", "", "path to plain-text body, or - for stdin")
+	replyAll := fs.Bool("reply-all", false, "answer everyone the message was addressed to, not only its sender")
 	confirm := fs.Bool("confirm", false, "actually send (required)")
 	dryRun := fs.Bool("dry-run", false, "preview without sending")
 	verbose := verboseFlag(fs)
+	usage := "docket mail reply --id <gm-id> --body-file - [--reply-all] [--confirm] [--verbose]"
 	if err := fs.Parse(args); err != nil {
-		return usageError(err.Error(), "docket mail reply --id <gm-id> --body-file - [--confirm] [--verbose]")
+		return usageError(err.Error(), usage)
 	}
 	if *id == "" || *bodyFile == "" {
-		return usageError("--id and --body-file are both required",
-			"docket mail reply --id <gm-id> --body-file - [--confirm] [--verbose]")
+		return usageError("--id and --body-file are both required", usage)
 	}
 	body, err := readBodyFile(*bodyFile)
 	if err != nil {
-		return usageError(err.Error(), "docket mail reply --id <gm-id> --body-file - [--confirm]")
+		return usageError(err.Error(), usage)
 	}
 
 	svc, labels, code := mailContext(ctx)
@@ -674,12 +675,22 @@ func cmdMailReply(ctx context.Context, args []string) int {
 		return code
 	}
 
-	plan, err := mail.PrepareReply(ctx, svc, *id, body)
+	prepare := mail.PrepareReply
+	if *replyAll {
+		prepare = mail.PrepareReplyAll
+	}
+	plan, err := prepare(ctx, svc, *id, body)
 	if err != nil {
 		return failMailLookup("MESSAGE_NOT_FOUND", err)
 	}
 
+	// The gate's re-run line repeats what was asked for, so a reader who confirms
+	// from it sends the same message to the same people rather than to a different
+	// set than the preview showed.
 	rerun := fmt.Sprintf("docket mail reply --id %s --body-file %s --confirm", *id, *bodyFile)
+	if *replyAll {
+		rerun = fmt.Sprintf("docket mail reply --id %s --body-file %s --reply-all --confirm", *id, *bodyFile)
+	}
 	proceed, code := writeGate("mail", "DOCKET_MAIL_READONLY", *confirm, *dryRun, plan, rerun)
 	if !proceed {
 		return code
