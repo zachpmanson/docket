@@ -105,6 +105,11 @@ Verify with `docket auth whoami`.
 | `mail reply --id <gm-msgid> --body-file -` | Reply (mutating: `--confirm`); `--reply-all` answers everyone the message was addressed to |
 | `mail label --id <gm-msgid> --add Foo --remove INBOX` | Apply/remove labels (mutating: `--confirm`) |
 
+The CLI's `send`/`reply` build a `text/plain` message; the library they call (`gmail/mail`)
+takes a `Body` — the text and, when a caller has one, the same words as HTML — and writes the
+second as a part of the same `multipart/alternative`. See
+[docket-design.md](docket-design.md#what-a-message-docket-sends-is-made-of).
+
 `search`/`list` return envelopes only (id, thread id, from/to, subject, date, labels,
 snippet) — bodies are expensive, so callers ask for them explicitly with `read`.
 
