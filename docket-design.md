@@ -226,7 +226,7 @@ docket mail list    --label INBOX [--limit 25] [--page-token <tok>] [--unread]
 docket mail read    --id <gm-msgid> [--max-bytes 20000|0] [--html]
 docket mail thread  --id <gm-thrid> [--html [--max-bytes 20000|0]]
 docket mail send    --to ... --subject ... --body-file - [--confirm]
-docket mail reply   --id <gm-msgid> --body-file - [--confirm]
+docket mail reply   --id <gm-msgid> --body-file - [--reply-all] [--confirm]
 docket mail label   --id <gm-msgid> --add Foo --remove INBOX [--confirm]
 ```
 
@@ -310,6 +310,33 @@ file anyway.
 One part per call. There is no batch attachments endpoint, so several parts in one call would
 save a subprocess spawn and not a round trip, and a partial result has no honest value for a
 single `ok` field.
+
+### Replies, and who a reply-all reaches
+
+`mail reply` answers the sender; `--reply-all` answers everyone the message was addressed to.
+Both resolve the recipients from the message being answered, because that is the only place
+the answer exists. The sender is the message's `Reply-To` when it has one and its `From`
+otherwise — a list posting to its members asks for answers at the list address, and docket
+answering the `From` instead would send the reply where the message asked it not to go. A
+reply-all puts that sender in `To` and the rest of the audience — the original `To`, then its
+`Cc`, in that order, each address once — in `Cc`.
+
+The subtractive step is the part docket and not its caller has to own: **an address belonging to
+the mailbox doing the replying is never a recipient.** That means `users.getProfile` plus
+`users.settings.sendAs.list`, not a guess from the corpus or the caller: the mail a person
+answers is usually addressed to a *send-as alias* rather than to the account's own name, which
+is exactly the address a caller-supplied list would miss and CC them on their own
+correspondence. Both reads live inside `https://mail.google.com/`, the grant docket already
+runs on, so reply-all asks for no new consent. Removing the mailbox from `To` can empty it —
+answering a message you sent yourself — and then the first of the remaining recipients is
+promoted into `To`, because a message needs one and replying to yourself is not the
+alternative.
+
+Recipients are re-serialised from parsed addresses rather than copied across as header text, so
+a display name keeps its name and a header cannot smuggle a second one; a header that is
+present but unparsable stops the reply rather than quietly reaching fewer people than the
+original did. `dry-run` prints the whole plan, `To` and `Cc` included, which is what makes a
+`--reply-all --confirm` reviewable — the addresses shown are the addresses used.
 
 `--max-bytes` keeps its meaning, `0` included. Over the cap is a refusal rather than a
 truncation — a half-written binary is corrupt in a way nothing downstream can detect — and it

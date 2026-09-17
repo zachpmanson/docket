@@ -52,6 +52,20 @@ type fakeGmail struct {
 	// attachmentRequests records the path of every attachments.get call, so a
 	// test can assert that a refused fetch cost no download.
 	attachmentRequests []string
+
+	// headers keyed by message id, overriding the default set, so a test can
+	// drive a reply against a message with a Cc, a Reply-To, or headers that
+	// are not an address list at all.
+	headers map[string][]*gmail.MessagePartHeader
+
+	// profile and sendAs stand in for the two reads that answer "which
+	// addresses are this mailbox's" (users.getProfile and
+	// users.settings.sendAs.list). Their status codes exist so a test can
+	// drive the case where the answer does not arrive at all.
+	profile       string
+	profileStatus int
+	sendAs        []string
+	sendAsStatus  int
 }
 
 type listPage struct {
@@ -68,6 +82,10 @@ func newFakeGmail(t *testing.T, pages map[string]listPage) *fakeGmail {
 		threads:          map[string][]string{},
 		attachments:      map[string][]byte{},
 		attachmentStatus: map[string]int{},
+		headers:          map[string][]*gmail.MessagePartHeader{},
+		// The mailbox's own address, which is not the sender of any fixture:
+		// a reply-all that kept it would CC the reader on their own mail.
+		profile: "reader@example.com",
 	}
 	mux := http.NewServeMux()
 
@@ -97,6 +115,26 @@ func newFakeGmail(t *testing.T, pages map[string]listPage) *fakeGmail {
 
 	// Registered alongside the messages subtree; the more specific pattern
 	// wins, so a content fetch does not fall through to messages.get.
+	mux.HandleFunc("/gmail/v1/users/me/profile", func(w http.ResponseWriter, r *http.Request) {
+		if f.profileStatus != 0 {
+			http.Error(w, `{"error":{"code":500,"message":"driven by the fixture"}}`, f.profileStatus)
+			return
+		}
+		writeJSON(t, w, gmail.Profile{EmailAddress: f.profile})
+	})
+
+	mux.HandleFunc("/gmail/v1/users/me/settings/sendAs", func(w http.ResponseWriter, r *http.Request) {
+		if f.sendAsStatus != 0 {
+			http.Error(w, `{"error":{"code":500,"message":"driven by the fixture"}}`, f.sendAsStatus)
+			return
+		}
+		resp := gmail.ListSendAsResponse{}
+		for _, email := range f.sendAs {
+			resp.SendAs = append(resp.SendAs, &gmail.SendAs{SendAsEmail: email})
+		}
+		writeJSON(t, w, resp)
+	})
+
 	mux.HandleFunc("/gmail/v1/users/me/messages/{id}/attachments/{attachmentID}",
 		func(w http.ResponseWriter, r *http.Request) {
 			f.attachmentRequests = append(f.attachmentRequests, r.URL.Path)
@@ -160,11 +198,22 @@ func (f *fakeGmail) message(id string) (gmail.Message, bool) {
 	if payload, ok := f.payloads[id]; ok {
 		msg := message(id, "")
 		msg.Payload = payload
-		msg.Payload.Headers = headers(id)
+		msg.Payload.Headers = f.headersFor(id)
 		return msg, true
 	}
 	body, ok := f.bodies[id]
-	return message(id, body), ok
+	msg := message(id, body)
+	msg.Payload.Headers = f.headersFor(id)
+	return msg, ok
+}
+
+// headersFor is the fixture's header set for one message: the test's own when it
+// set one, the default otherwise.
+func (f *fakeGmail) headersFor(id string) []*gmail.MessagePartHeader {
+	if h, ok := f.headers[id]; ok {
+		return h
+	}
+	return headers(id)
 }
 
 // message builds a plausible messages.get response. Every value is invented:
