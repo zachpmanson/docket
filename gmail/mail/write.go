@@ -86,6 +86,11 @@ func PrepareReply(ctx context.Context, svc *gmail.Service, id string, body Body)
 // make and a caller cannot: which of the addresses on a message are the ones
 // reading it. A caller assembling this itself would be asking a second question
 // (who am I?) that only the account can answer.
+//
+// Taking the reader off the audience is a rule about *their* addresses, not a rule
+// that a reply cannot be to one of them: when every address on the message is the
+// mailbox's own, the sender comes back on the reply and it answers the reader (see
+// replyRecipients). A reply always has somewhere to go.
 func PrepareReplyAll(ctx context.Context, svc *gmail.Service, id string, body Body) (*SendPlan, error) {
 	return prepareReply(ctx, svc, id, body, true)
 }
@@ -209,9 +214,20 @@ func replyRecipients(ctx context.Context, svc *gmail.Service, h []*gmail.Message
 		}
 		ccList = append(ccList, a)
 	}
+	// A message whose whole audience is this mailbox — a note to self, or two of
+	// the reader's own addresses talking to each other — has nobody left once the
+	// reader is taken off it, and a message needs a recipient. So the sender comes
+	// back: answering yourself is what a reply to such a message means, and it is
+	// the only reader this package can name without inventing an address. The
+	// alternative (refusing) tells a reader who wants to add a line to their own
+	// thread that they cannot reply to it, which is both true of no other mail
+	// client and a dead end: there is no field here to name somebody else.
+	//
+	// Note what this does *not* do: the rest of the audience stays off. When the
+	// message was one of the reader's addresses writing to another, the reply goes
+	// to the one that wrote, not to every alias the reader owns.
 	if len(toList) == 0 {
-		return "", "", fmt.Errorf(
-			"every address on the message belongs to this mailbox, so there is nobody to reply to")
+		toList = sender
 	}
 	return joinAddresses(toList), joinAddresses(ccList), nil
 }
