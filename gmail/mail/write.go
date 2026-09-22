@@ -34,10 +34,14 @@ type Body struct {
 // preview before the caller decides whether to Execute it.
 //
 // Cc is empty for a reply to the sender alone and carries the rest of a
-// message's audience for a reply-all (see PrepareReplyAll). It is a header,
-// not a knob: both fields are assembled here from the message being answered,
-// and neither has a caller-supplied form — that is what makes a plan
-// reviewable, since the addresses it shows are the addresses it uses.
+// message's audience for a reply-all (see PrepareReplyAll). Both fields are
+// assembled here from the message being answered — and only from it: the
+// recipients come from that message's own headers, minus the addresses of this
+// mailbox, so there is no field a caller can name a recipient in. A plan can
+// then be narrowed or rearranged within that audience before it is sent (see
+// WithRecipients), which is what makes it a preview a reader can edit rather
+// than a decision already made: the addresses it shows are still the addresses
+// it uses, and no address the message did not carry can be added to it.
 //
 // Body is the plain-text part and HTML the alternative beside it, empty when the
 // message is text alone (see buildRawMessage).
@@ -48,8 +52,33 @@ type SendPlan struct {
 	Body    string `json:"body"`
 	HTML    string `json:"html,omitempty"`
 
+	// ToRecipients and CcRecipients are To and Cc as addresses rather than as the
+	// header they will be written into: each with the display name the message
+	// being answered gave it, in the order it carried them. The strings above are
+	// these rendered, so the two always agree; these are what a caller rearranges
+	// the audience from (see WithRecipients), and what a client shows as the
+	// chips of a plan.
+	ToRecipients []Recipient `json:"to_recipients,omitempty"`
+	CcRecipients []Recipient `json:"cc_recipients,omitempty"`
+
 	raw      string
 	threadID string
+	// opts is the whole message this plan was built from, kept so that a plan
+	// rebuilt against a different audience is the same message with a different
+	// To/Cc rather than a patch of bytes that were already serialised (see
+	// WithRecipients).
+	opts rawMessageOptions
+}
+
+// Recipient is one address a plan carries, with the display name the message
+// being answered gave it. The Address is what a message is sent to; the Name is
+// what a reader is shown it as. A plan's recipients are the whole of the
+// audience it may use: an address outside this set is refused (see
+// WithRecipients), so a reply can reach only what the message it answers already
+// carried.
+type Recipient struct {
+	Name    string `json:"name,omitempty"`
+	Address string `json:"address"`
 }
 
 // PrepareSend validates a send request and builds the raw RFC 5322 message,
@@ -60,13 +89,125 @@ func PrepareSend(to, subject string, body Body) (*SendPlan, error) {
 			"--to %q is not a valid address list: %w (expected e.g. \"a@example.com\" "+
 				"or \"a@example.com, b@example.com\")", to, err)
 	}
-	raw, err := buildRawMessage(rawMessageOptions{
-		To: to, Subject: subject, Body: body.Text, HTML: body.HTML,
-	})
+	opts := rawMessageOptions{To: to, Subject: subject, Body: body.Text, HTML: body.HTML}
+	raw, err := buildRawMessage(opts)
 	if err != nil {
 		return nil, err
 	}
-	return &SendPlan{To: to, Subject: subject, Body: body.Text, HTML: body.HTML, raw: raw}, nil
+	sent, err := addresses(to, "To")
+	if err != nil {
+		return nil, err
+	}
+	return &SendPlan{
+		To: to, Subject: subject, Body: body.Text, HTML: body.HTML,
+		ToRecipients: recipientsOf(sent), raw: raw, opts: opts,
+	}, nil
+}
+
+// WithRecipients is this plan with a chosen audience: the addresses it is to
+// carry in to and in cc, each named as one of the plan's own recipients (see
+// ToRecipients/CcRecipients). The raw message is built again from the plan's own
+// fields rather than patched, so what a caller sends is what the plan now holds.
+//
+// It may only rearrange what the plan already carries, never widen it. An address
+// that is not one of the plan's recipients is refused — and because those were
+// resolved from the answered message's headers minus this mailbox's own, an
+// address the message did not carry has no spelling that reaches it here. An
+// empty to is refused too: a message with nobody on it is not a narrower version
+// of this one. An address may appear once and in one list, since a recipient is
+// one recipient.
+//
+// A plan is not mutated: the returned plan is a copy, and calling this twice from
+// the same plan starts from the same audience.
+func (p *SendPlan) WithRecipients(to, cc []string) (*SendPlan, error) {
+	known := map[string]Recipient{}
+	for _, list := range [][]Recipient{p.ToRecipients, p.CcRecipients} {
+		for _, r := range list {
+			key := strings.ToLower(r.Address)
+			if _, ok := known[key]; !ok {
+				known[key] = r
+			}
+		}
+	}
+	pick := func(list []string, what string) ([]Recipient, error) {
+		out := make([]Recipient, 0, len(list))
+		seen := map[string]bool{}
+		for _, want := range list {
+			addr, err := mail.ParseAddress(strings.TrimSpace(want))
+			if err != nil {
+				return nil, fmt.Errorf("the %s address %q is not an address: %w", what, want, err)
+			}
+			key := addressKey(addr)
+			if seen[key] {
+				return nil, fmt.Errorf("the %s list names %q twice", what, want)
+			}
+			seen[key] = true
+			r, ok := known[key]
+			if !ok {
+				return nil, fmt.Errorf(
+					"%q is not an address the message being answered carried, so the reply "+
+						"cannot reach it: the audience is the message's own, and this can only "+
+						"take people off it or move them between To and Cc", want)
+			}
+			out = append(out, r)
+		}
+		return out, nil
+	}
+
+	toList, err := pick(to, "to")
+	if err != nil {
+		return nil, err
+	}
+	ccList, err := pick(cc, "cc")
+	if err != nil {
+		return nil, err
+	}
+	if len(toList) == 0 {
+		return nil, errors.New("a reply needs somebody in To: to names no address")
+	}
+	inTo := map[string]bool{}
+	for _, r := range toList {
+		inTo[strings.ToLower(r.Address)] = true
+	}
+	for _, r := range ccList {
+		if inTo[strings.ToLower(r.Address)] {
+			return nil, fmt.Errorf(
+				"%q is in both To and Cc: one recipient is one address, in one list", r.Address)
+		}
+	}
+
+	toStr, ccStr := joinRecipients(toList), joinRecipients(ccList)
+	opts := p.opts
+	opts.To, opts.Cc = toStr, ccStr
+	raw, err := buildRawMessage(opts)
+	if err != nil {
+		return nil, err
+	}
+	out := *p
+	out.To, out.Cc = toStr, ccStr
+	out.ToRecipients, out.CcRecipients = toList, ccList
+	out.raw, out.opts = raw, opts
+	return &out, nil
+}
+
+// recipientsOf is a parsed address list as a plan holds it, keeping the names
+// the message gave each address.
+func recipientsOf(list []*mail.Address) []Recipient {
+	out := make([]Recipient, 0, len(list))
+	for _, a := range list {
+		out = append(out, Recipient{Name: a.Name, Address: a.Address})
+	}
+	return out
+}
+
+// joinRecipients renders chosen recipients the way a header carries them, through
+// the same formatAddress a plan's own To and Cc are built with.
+func joinRecipients(list []Recipient) string {
+	addrs := make([]*mail.Address, 0, len(list))
+	for _, r := range list {
+		addrs = append(addrs, &mail.Address{Name: r.Name, Address: r.Address})
+	}
+	return joinAddresses(addrs)
 }
 
 // PrepareReply fetches the message being replied to (a read-only call) and
@@ -127,17 +268,20 @@ func prepareReply(ctx context.Context, svc *gmail.Service, id string, body Body,
 		return nil, fmt.Errorf("assembling the reply to %q: %w", id, err)
 	}
 
-	raw, err := buildRawMessage(rawMessageOptions{
-		To: to, Cc: cc, Subject: subject, Body: body.Text, HTML: body.HTML,
+	toStr, ccStr := joinAddresses(to), joinAddresses(cc)
+	opts := rawMessageOptions{
+		To: toStr, Cc: ccStr, Subject: subject, Body: body.Text, HTML: body.HTML,
 		InReplyTo: messageID, References: references,
-	})
+	}
+	raw, err := buildRawMessage(opts)
 	if err != nil {
 		return nil, err
 	}
 
 	return &SendPlan{
-		To: to, Cc: cc, Subject: subject, Body: body.Text, HTML: body.HTML,
-		raw: raw, threadID: original.ThreadId,
+		To: toStr, Cc: ccStr, Subject: subject, Body: body.Text, HTML: body.HTML,
+		ToRecipients: recipientsOf(to), CcRecipients: recipientsOf(cc),
+		raw: raw, threadID: original.ThreadId, opts: opts,
 	}, nil
 }
 
@@ -158,35 +302,35 @@ func prepareReply(ctx context.Context, svc *gmail.Service, id string, body Body,
 // leaves To empty — answering a message you sent yourself — the first of the
 // remaining recipients is promoted into To, because a message needs one and
 // replying to yourself is not the alternative.
-func replyRecipients(ctx context.Context, svc *gmail.Service, h []*gmail.MessagePartHeader, all bool) (to, cc string, err error) {
+func replyRecipients(ctx context.Context, svc *gmail.Service, h []*gmail.MessagePartHeader, all bool) (to, cc []*mail.Address, err error) {
 	sender, err := addresses(header(h, "Reply-To"), "Reply-To")
 	if err != nil {
-		return "", "", err
+		return nil, nil, err
 	}
 	if len(sender) == 0 {
 		sender, err = addresses(header(h, "From"), "From")
 		if err != nil {
-			return "", "", err
+			return nil, nil, err
 		}
 	}
 	if len(sender) == 0 {
-		return "", "", fmt.Errorf("the message has no From header to reply to")
+		return nil, nil, fmt.Errorf("the message has no From header to reply to")
 	}
 	if !all {
-		return joinAddresses(sender), "", nil
+		return sender, nil, nil
 	}
 
 	own, err := ownAddresses(ctx, svc)
 	if err != nil {
-		return "", "", err
+		return nil, nil, err
 	}
 	others, err := addresses(header(h, "To"), "To")
 	if err != nil {
-		return "", "", err
+		return nil, nil, err
 	}
 	more, err := addresses(header(h, "Cc"), "Cc")
 	if err != nil {
-		return "", "", err
+		return nil, nil, err
 	}
 	others = append(others, more...)
 
@@ -229,7 +373,7 @@ func replyRecipients(ctx context.Context, svc *gmail.Service, h []*gmail.Message
 	if len(toList) == 0 {
 		toList = sender
 	}
-	return joinAddresses(toList), joinAddresses(ccList), nil
+	return toList, ccList, nil
 }
 
 // addressKey is how two addresses are compared: the address without its display

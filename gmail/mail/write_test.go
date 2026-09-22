@@ -442,3 +442,162 @@ func mustSend(t *testing.T, body Body) *SendPlan {
 	}
 	return plan
 }
+
+// The audience a plan can be narrowed to: the addresses the message carried, in
+// the two lists a reply puts them in. What is checked here is that the raw
+// message is built from the chosen set rather than patched, and that the set can
+// only be a rearrangement of what the message already had.
+func TestWithRecipientsNarrowsTheAudienceAndRebuildsTheMessage(t *testing.T) {
+	svc := replyFixture(t,
+		hdr("From", "Dana Okafor <dana@example.com>"),
+		hdr("To", "reader@example.com, carl@example.net"),
+		hdr("Cc", "ops@example.org"),
+		hdr("Subject", "quarterly widget audit"),
+	)
+	plan, err := PrepareReplyAll(context.Background(), svc, "m1", Body{Text: "noted"})
+	if err != nil {
+		t.Fatalf("preparing the reply-all: %v", err)
+	}
+	// The plan holds the audience as addresses, with the names the message gave
+	// them, in the order it carried them.
+	if len(plan.ToRecipients) != 1 || plan.ToRecipients[0] != (Recipient{Name: "Dana Okafor", Address: "dana@example.com"}) {
+		t.Errorf("ToRecipients = %+v", plan.ToRecipients)
+	}
+	if len(plan.CcRecipients) != 2 || plan.CcRecipients[0].Address != "carl@example.net" || plan.CcRecipients[1].Address != "ops@example.org" {
+		t.Errorf("CcRecipients = %+v", plan.CcRecipients)
+	}
+
+	// Untick ops: it was on the message, and the message that goes out no longer
+	// carries it — not in the header, and not in the bytes either.
+	narrowed, err := plan.WithRecipients(
+		[]string{"dana@example.com"},
+		[]string{"carl@example.net"},
+	)
+	if err != nil {
+		t.Fatalf("narrowing the reply: %v", err)
+	}
+	if narrowed.Cc != "carl@example.net" {
+		t.Errorf("Cc = %q, want the one address left", narrowed.Cc)
+	}
+	if got := raw(t, narrowed); strings.Contains(got, "ops@example.org") {
+		t.Errorf("the dropped address is still in the message:\n%s", got)
+	}
+	if got := raw(t, narrowed); !strings.Contains(got, "Cc: carl@example.net\r\n") {
+		t.Errorf("the message does not carry the narrowed Cc:\n%s", got)
+	}
+	// The plan it came from is untouched: a second narrowing starts from the
+	// message's whole audience rather than from the first result.
+	if plan.Cc != "carl@example.net, ops@example.org" {
+		t.Errorf("the original plan was mutated: Cc = %q", plan.Cc)
+	}
+}
+
+func TestWithRecipientsMovesAnAddressBetweenToAndCc(t *testing.T) {
+	svc := replyFixture(t,
+		hdr("From", "Dana Okafor <dana@example.com>"),
+		hdr("To", "reader@example.com"),
+		hdr("Cc", "carl@example.net"),
+		hdr("Subject", "quarterly widget audit"),
+	)
+	plan, err := PrepareReplyAll(context.Background(), svc, "m1", Body{Text: "noted"})
+	if err != nil {
+		t.Fatalf("preparing the reply-all: %v", err)
+	}
+	moved, err := plan.WithRecipients(
+		[]string{"dana@example.com", "carl@example.net"},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("moving the recipient: %v", err)
+	}
+	if moved.To != "Dana Okafor <dana@example.com>, carl@example.net" {
+		t.Errorf("To = %q, want both addresses in the message's own order", moved.To)
+	}
+	if moved.Cc != "" {
+		t.Errorf("Cc = %q, want empty", moved.Cc)
+	}
+	got := raw(t, moved)
+	if strings.Contains(got, "Cc:") {
+		t.Errorf("a message with nobody in Cc carries a Cc header:\n%s", got)
+	}
+	if !strings.Contains(got, "To: Dana Okafor <dana@example.com>, carl@example.net\r\n") {
+		t.Errorf("the moved address is not in To:\n%s", got)
+	}
+	// The display name follows the address it was carried with.
+	if len(moved.ToRecipients) != 2 || moved.ToRecipients[1] != (Recipient{Address: "carl@example.net"}) {
+		t.Errorf("ToRecipients = %+v", moved.ToRecipients)
+	}
+}
+
+func TestWithRecipientsRefusesAnAddressTheMessageDidNotCarry(t *testing.T) {
+	// The hard limit: a plan can be narrowed and rearranged, never widened. An
+	// address the message being answered did not carry has no spelling that
+	// reaches it, because it is not in the plan's audience at all.
+	svc := replyFixture(t,
+		hdr("From", "Dana Okafor <dana@example.com>"),
+		hdr("To", "reader@example.com"),
+		hdr("Subject", "quarterly widget audit"),
+	)
+	plan, err := PrepareReplyAll(context.Background(), svc, "m1", Body{Text: "noted"})
+	if err != nil {
+		t.Fatalf("preparing the reply-all: %v", err)
+	}
+	_, err = plan.WithRecipients([]string{"dana@example.com", "stranger@example.com"}, nil)
+	if err == nil {
+		t.Fatal("an address the message did not carry was accepted")
+	}
+	if !strings.Contains(err.Error(), "carried") {
+		t.Errorf("the error does not say why: %v", err)
+	}
+	// And the mailbox's own addresses are outside the audience too: they were
+	// taken off the message when it was assembled, so they cannot be put back.
+	_, err = plan.WithRecipients([]string{"reader@example.com"}, nil)
+	if err == nil {
+		t.Fatal("an address belonging to the mailbox was accepted")
+	}
+}
+
+func TestWithRecipientsRefusesAnEmptyOrDoubledTo(t *testing.T) {
+	svc := replyFixture(t,
+		hdr("From", "Dana Okafor <dana@example.com>"),
+		hdr("To", "reader@example.com"),
+		hdr("Cc", "carl@example.net"),
+		hdr("Subject", "quarterly widget audit"),
+	)
+	plan, err := PrepareReplyAll(context.Background(), svc, "m1", Body{Text: "noted"})
+	if err != nil {
+		t.Fatalf("preparing the reply-all: %v", err)
+	}
+	if _, err := plan.WithRecipients(nil, []string{"carl@example.net"}); err == nil {
+		t.Error("a reply with nobody in To was accepted")
+	}
+	// One address in both lists, or twice in one, is one recipient said twice —
+	// and would be a message with the same person on it two ways.
+	if _, err := plan.WithRecipients(
+		[]string{"dana@example.com"},
+		[]string{"dana@example.com"},
+	); err == nil {
+		t.Error("an address in both To and Cc was accepted")
+	}
+	if _, err := plan.WithRecipients(
+		[]string{"dana@example.com", "Dana@Example.com"},
+		nil,
+	); err == nil {
+		t.Error("an address twice in To was accepted")
+	}
+}
+
+func TestPrepareSendCarriesItsRecipientsAsAddresses(t *testing.T) {
+	plan, err := PrepareSend("Dana Okafor <dana@example.com>, carl@example.net", "hi", Body{Text: "body"})
+	if err != nil {
+		t.Fatalf("preparing a send: %v", err)
+	}
+	if len(plan.ToRecipients) != 2 ||
+		plan.ToRecipients[0] != (Recipient{Name: "Dana Okafor", Address: "dana@example.com"}) ||
+		plan.ToRecipients[1] != (Recipient{Address: "carl@example.net"}) {
+		t.Errorf("ToRecipients = %+v", plan.ToRecipients)
+	}
+	if len(plan.CcRecipients) != 0 {
+		t.Errorf("CcRecipients = %+v, want none", plan.CcRecipients)
+	}
+}
