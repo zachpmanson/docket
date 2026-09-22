@@ -16,7 +16,7 @@
           pname = "docket";
           version = "0.1.0";
           src = ./.;
-          vendorHash = "sha256-DYn70cyQUTfVHPz13YlyDZIMarlGmjEAC/BbcAjirkU=";
+          vendorHash = "sha256-17c1yTiYiXLIA8exx9yqRBF3tssl7WKu1Tc9b3wqMR8=";
           # gmail/ is a nested Go module (own go.mod) consumed via the
           # root module's replace; buildGoModule's per-directory build
           # loop must not treat it as subpackages of the root.
