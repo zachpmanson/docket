@@ -34,14 +34,15 @@ type Body struct {
 // preview before the caller decides whether to Execute it.
 //
 // Cc is empty for a reply to the sender alone and carries the rest of a
-// message's audience for a reply-all (see PrepareReplyAll). Both fields are
-// assembled here from the message being answered — and only from it: the
-// recipients come from that message's own headers, minus the addresses of this
-// mailbox, so there is no field a caller can name a recipient in. A plan can
-// then be narrowed or rearranged within that audience before it is sent (see
-// WithRecipients), which is what makes it a preview a reader can edit rather
-// than a decision already made: the addresses it shows are still the addresses
-// it uses, and no address the message did not carry can be added to it.
+// message's audience for a reply-all (see PrepareReplyAll). Both fields start as
+// the message being answered assembled them: the recipients come from that
+// message's own headers, minus the addresses of this mailbox. A plan may then be
+// rearranged, narrowed, or widened before it is sent (see WithRecipients), which
+// is what makes it a preview a reader can edit rather than a decision already
+// made — and, since a caller may name an address the message did not carry, the
+// audience a send reaches is finally the caller's decision rather than this
+// package's. The plan's own recipients remain the default: a caller that names
+// nothing sends what the message carried.
 //
 // Body is the plain-text part and HTML the alternative beside it, empty when the
 // message is text alone (see buildRawMessage).
@@ -72,10 +73,11 @@ type SendPlan struct {
 
 // Recipient is one address a plan carries, with the display name the message
 // being answered gave it. The Address is what a message is sent to; the Name is
-// what a reader is shown it as. A plan's recipients are the whole of the
-// audience it may use: an address outside this set is refused (see
-// WithRecipients), so a reply can reach only what the message it answers already
-// carried.
+// what a reader is shown it as. A plan's own recipients are the audience the
+// message carried, and are what a send reaches when the caller names nothing;
+// a caller may name addresses beyond them (see WithRecipients), which is a
+// decision about who a reply reaches that this package makes visible rather
+// than makes impossible.
 type Recipient struct {
 	Name    string `json:"name,omitempty"`
 	Address string `json:"address"`
@@ -105,17 +107,34 @@ func PrepareSend(to, subject string, body Body) (*SendPlan, error) {
 }
 
 // WithRecipients is this plan with a chosen audience: the addresses it is to
-// carry in to and in cc, each named as one of the plan's own recipients (see
-// ToRecipients/CcRecipients). The raw message is built again from the plan's own
-// fields rather than patched, so what a caller sends is what the plan now holds.
+// carry in to and in cc, written the way a header carries them ("Dana Okafor
+// <dana@example.com>", or a bare address). The raw message is built again from
+// the plan's own fields rather than patched, so what a caller sends is what the
+// plan now holds.
 //
-// It may only rearrange what the plan already carries, never widen it. An address
-// that is not one of the plan's recipients is refused — and because those were
-// resolved from the answered message's headers minus this mailbox's own, an
-// address the message did not carry has no spelling that reaches it here. An
-// empty to is refused too: a message with nobody on it is not a narrower version
-// of this one. An address may appear once and in one list, since a recipient is
-// one recipient.
+// **An address the message being answered did not carry is accepted.** That is
+// this method's whole posture, and it is deliberate: assembling a reply's
+// audience from the message's own headers is what kept a plan from reaching
+// anyone the message did not, and a caller that wants to reply to somebody it
+// names itself cannot do that if the only addresses with a spelling are the ones
+// the message already carried. So the plan's own recipients are the DEFAULT (a
+// null list leaves that side as the mailbox assembled it, and a caller naming
+// nothing sends what the message carried), not a limit on what may be named.
+//
+// An address that was one of the plan's own keeps the display name the message
+// gave it; one the message did not carry is carried as the caller wrote it,
+// name included. What is still refused is the shape of the audience rather than
+// its membership: an address that does not parse, an empty to (a message with
+// nobody on it is not a narrower version of this one), and one address appearing
+// twice — in one list or in both, since a recipient is one recipient.
+//
+// Because the plan's own recipients were resolved from the answered message's
+// headers minus this mailbox's addresses, the addresses belonging to the mailbox
+// are absent from any audience a caller leaves alone — and a caller that names
+// one is naming it on purpose, so it is not subtracted here. Nor is a widened
+// audience checked against anything else: whether a reply should be able to
+// reach an address is the calling surface's decision, and this package carries
+// out what it is told (see chainmail's reply box for the surface that decides).
 //
 // A plan is not mutated: the returned plan is a copy, and calling this twice from
 // the same plan starts from the same audience.
@@ -144,10 +163,12 @@ func (p *SendPlan) WithRecipients(to, cc []string) (*SendPlan, error) {
 			seen[key] = true
 			r, ok := known[key]
 			if !ok {
-				return nil, fmt.Errorf(
-					"%q is not an address the message being answered carried, so the reply "+
-						"cannot reach it: the audience is the message's own, and this can only "+
-						"take people off it or move them between To and Cc", want)
+				// Not one the message carried: the caller is naming it, so it is
+				// carried as the caller wrote it rather than refused. Its name is
+				// whatever the caller put in front of it, which is nothing when
+				// somebody typed an address and something when they picked a
+				// person the corpus knows (see chainmail's address field).
+				r = Recipient{Name: addr.Name, Address: addr.Address}
 			}
 			out = append(out, r)
 		}

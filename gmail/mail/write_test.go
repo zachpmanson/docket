@@ -445,8 +445,9 @@ func mustSend(t *testing.T, body Body) *SendPlan {
 
 // The audience a plan can be narrowed to: the addresses the message carried, in
 // the two lists a reply puts them in. What is checked here is that the raw
-// message is built from the chosen set rather than patched, and that the set can
-// only be a rearrangement of what the message already had.
+// message is built from the chosen set rather than patched — and that a caller
+// may name fewer addresses than the message carried, which is the other half of
+// naming the audience outright (see TestWithRecipientsWidensTheAudience…).
 func TestWithRecipientsNarrowsTheAudienceAndRebuildsTheMessage(t *testing.T) {
 	svc := replyFixture(t,
 		hdr("From", "Dana Okafor <dana@example.com>"),
@@ -529,10 +530,10 @@ func TestWithRecipientsMovesAnAddressBetweenToAndCc(t *testing.T) {
 	}
 }
 
-func TestWithRecipientsRefusesAnAddressTheMessageDidNotCarry(t *testing.T) {
-	// The hard limit: a plan can be narrowed and rearranged, never widened. An
-	// address the message being answered did not carry has no spelling that
-	// reaches it, because it is not in the plan's audience at all.
+// The audience a plan may be given, including addresses the message being
+// answered never carried: a caller names who the reply goes to, and this is
+// where that is carried out rather than refused.
+func TestWithRecipientsWidensTheAudienceAndRebuildsTheMessage(t *testing.T) {
 	svc := replyFixture(t,
 		hdr("From", "Dana Okafor <dana@example.com>"),
 		hdr("To", "reader@example.com"),
@@ -542,18 +543,55 @@ func TestWithRecipientsRefusesAnAddressTheMessageDidNotCarry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preparing the reply-all: %v", err)
 	}
-	_, err = plan.WithRecipients([]string{"dana@example.com", "stranger@example.com"}, nil)
-	if err == nil {
-		t.Fatal("an address the message did not carry was accepted")
+
+	// One address typed by hand, and one a caller knows the name of. Neither was
+	// on the message, and both are on the reply — in the plan, in the header, and
+	// in the bytes of the message that would go out.
+	widened, err := plan.WithRecipients(
+		[]string{"dana@example.com", "stranger@example.com"},
+		[]string{"Ada Okoye <ada@example.net>"},
+	)
+	if err != nil {
+		t.Fatalf("naming the reply's audience: %v", err)
 	}
-	if !strings.Contains(err.Error(), "carried") {
-		t.Errorf("the error does not say why: %v", err)
+	if widened.To != "Dana Okafor <dana@example.com>, stranger@example.com" {
+		t.Errorf("To = %q, want the sender and the typed address", widened.To)
 	}
-	// And the mailbox's own addresses are outside the audience too: they were
-	// taken off the message when it was assembled, so they cannot be put back.
-	_, err = plan.WithRecipients([]string{"reader@example.com"}, nil)
-	if err == nil {
-		t.Fatal("an address belonging to the mailbox was accepted")
+	if widened.Cc != "Ada Okoye <ada@example.net>" {
+		t.Errorf("Cc = %q, want the named address", widened.Cc)
+	}
+	got := raw(t, widened)
+	if !strings.Contains(got, "To: Dana Okafor <dana@example.com>, stranger@example.com\r\n") {
+		t.Errorf("the widened To is not in the message:\n%s", got)
+	}
+	if !strings.Contains(got, "Cc: Ada Okoye <ada@example.net>\r\n") {
+		t.Errorf("the widened Cc is not in the message:\n%s", got)
+	}
+	// Still a reply to the message it was prepared from: widening the audience
+	// rebuilds the message and does not lose what threaded it.
+	if !strings.Contains(got, "In-Reply-To: <m1@mail.example.com>\r\n") {
+		t.Errorf("the widened reply lost its threading:\n%s", got)
+	}
+
+	// An address that was the message's own keeps the name the message gave it,
+	// and one the message did not carry is carried as the caller wrote it.
+	if len(widened.ToRecipients) != 2 ||
+		widened.ToRecipients[0] != (Recipient{Name: "Dana Okafor", Address: "dana@example.com"}) ||
+		widened.ToRecipients[1] != (Recipient{Address: "stranger@example.com"}) {
+		t.Errorf("ToRecipients = %+v", widened.ToRecipients)
+	}
+	if len(widened.CcRecipients) != 1 ||
+		widened.CcRecipients[0] != (Recipient{Name: "Ada Okoye", Address: "ada@example.net"}) {
+		t.Errorf("CcRecipients = %+v", widened.CcRecipients)
+	}
+
+	// The plan it came from is untouched, and the widened plan is one a caller can
+	// narrow again: its added addresses are its own recipients now.
+	if plan.To != "Dana Okafor <dana@example.com>" || plan.Cc != "" {
+		t.Errorf("the original plan was mutated: To = %q, Cc = %q", plan.To, plan.Cc)
+	}
+	if _, err := widened.WithRecipients([]string{"stranger@example.com"}, nil); err != nil {
+		t.Errorf("the widened audience could not be narrowed again: %v", err)
 	}
 }
 
@@ -572,10 +610,12 @@ func TestWithRecipientsRefusesAnEmptyOrDoubledTo(t *testing.T) {
 		t.Error("a reply with nobody in To was accepted")
 	}
 	// One address in both lists, or twice in one, is one recipient said twice —
-	// and would be a message with the same person on it two ways.
+	// and would be a message with the same person on it two ways. Which list an
+	// address is in is the caller's to choose; being in two of them is not a
+	// choice, and neither list is widened by refusing it.
 	if _, err := plan.WithRecipients(
 		[]string{"dana@example.com"},
-		[]string{"dana@example.com"},
+		[]string{"Dana@Example.com"},
 	); err == nil {
 		t.Error("an address in both To and Cc was accepted")
 	}
@@ -584,6 +624,11 @@ func TestWithRecipientsRefusesAnEmptyOrDoubledTo(t *testing.T) {
 		nil,
 	); err == nil {
 		t.Error("an address twice in To was accepted")
+	}
+	// The shape of an address is the other thing that is still checked, for the
+	// same reason: what cannot be parsed cannot be written into a header.
+	if _, err := plan.WithRecipients([]string{"not an address"}, nil); err == nil {
+		t.Error("a string that is not an address was accepted")
 	}
 }
 
