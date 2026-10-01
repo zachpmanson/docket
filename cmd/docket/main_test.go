@@ -5,10 +5,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"google.golang.org/api/googleapi"
 
+	"github.com/zachpmanson/docket/gmail/auth"
 	"github.com/zachpmanson/docket/gmail/mail"
 	"github.com/zachpmanson/docket/internal/out"
 )
@@ -41,6 +45,49 @@ func captureStdout(t *testing.T, fn func() int) (string, int) {
 // a non-zero exit, and a retryable flag that is true only where trying again
 // can help. A bulk fetcher branches on exactly these, and two outcomes sharing
 // a code would have it record a rate limit as a permanent gap.
+func TestExtractAccountFlag(t *testing.T) {
+	args, account, err := extractAccountFlag([]string{"--account", "work", "mail", "search", "--query", "is:unread"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account != "work" || !reflect.DeepEqual(args, []string{"mail", "search", "--query", "is:unread"}) {
+		t.Fatalf("got args %v, account %q", args, account)
+	}
+	args, account, err = extractAccountFlag([]string{"mail", "search", "--account=home"})
+	if err != nil || account != "home" || !reflect.DeepEqual(args, []string{"mail", "search"}) {
+		t.Fatalf("equals form: args %v, account %q, err %v", args, account, err)
+	}
+	for _, invalid := range [][]string{{"--account"}, {"--account="}, {"--account", "one", "--account", "two"}} {
+		if _, _, err := extractAccountFlag(invalid); err == nil {
+			t.Errorf("extractAccountFlag(%v) accepted invalid selection", invalid)
+		}
+	}
+}
+
+func TestAccountSelectionFailureIsUsage(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	for _, name := range []string{"one", "two"} {
+		if err := auth.ImportTokenForAccount(strings.NewReader(`{"access_token":"x"}`), name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := auth.ResolveAccount("")
+	if err == nil {
+		t.Fatal("expected a selection error with two profiles and no --account")
+	}
+	var code int
+	var ok bool
+	captureStdout(t, func() int {
+		code, ok = accountSelectionFail(err)
+		return code
+	})
+	if !ok || code != out.ExitUsage {
+		t.Fatalf("accountSelectionFail = (%d, %v), want (%d, true)", code, ok, out.ExitUsage)
+	}
+}
+
 func TestAttachmentFailuresAreClassifiable(t *testing.T) {
 	cases := []struct {
 		name      string

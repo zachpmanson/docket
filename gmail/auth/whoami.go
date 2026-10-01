@@ -20,16 +20,7 @@ type WhoAmI struct {
 // current config and on-disk token file. Mail and calendar commands use this
 // as the credential for their respective clients.
 func TokenSource(ctx context.Context, cfg *Config) (oauth2.TokenSource, error) {
-	path, err := TokenPath()
-	if err != nil {
-		return nil, err
-	}
-	tok, err := readToken(path)
-	if err != nil {
-		return nil, fmt.Errorf("no token on disk (run `docket auth login`): %w", err)
-	}
-	base := oauthConfig(cfg.Provider).TokenSource(ctx, tok)
-	return NewPersistingTokenSource(base, path), nil
+	return TokenSourceForAccount(ctx, cfg, "")
 }
 
 // WhoAmIFromToken calls Google's tokeninfo endpoint to resolve the email
@@ -77,6 +68,11 @@ func WhoAmIFromToken(ctx context.Context, src oauth2.TokenSource) (*WhoAmI, erro
 // persists it to the token store, so a login performed on one machine can be
 // piped to a headless server. Refresh tokens aren't machine-bound.
 func ImportToken(r io.Reader) error {
+	return ImportTokenForAccount(r, "default")
+}
+
+// ImportTokenForAccount reads and stores a token for the named account.
+func ImportTokenForAccount(r io.Reader, account string) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -85,17 +81,25 @@ func ImportToken(r io.Reader) error {
 	if err := json.Unmarshal(data, &tok); err != nil {
 		return fmt.Errorf("parsing token: %w", err)
 	}
-	path, err := TokenPath()
+	path, err := AccountTokenPath(account)
 	if err != nil {
 		return err
 	}
-	return writeToken(path, &tok)
+	if err := writeToken(path, &tok); err != nil {
+		return err
+	}
+	return RegisterAccount(account, "")
 }
 
 // ExportToken writes the current on-disk token as JSON to w (e.g. stdout),
 // for piping to `docket auth import` on another machine.
 func ExportToken(w io.Writer) error {
-	path, err := TokenPath()
+	return ExportTokenForAccount(w, "default")
+}
+
+// ExportTokenForAccount writes the named account token as JSON.
+func ExportTokenForAccount(w io.Writer, account string) error {
+	path, err := AccountTokenPath(account)
 	if err != nil {
 		return err
 	}

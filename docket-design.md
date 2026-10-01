@@ -149,7 +149,14 @@ refresh token on re-authorization, which produces a token that mysteriously dies
 
 ### Token store
 
-- `$XDG_STATE_HOME/docket/token.json`, mode `0600`, parent dir `0700`.
+- `$XDG_STATE_HOME/docket/accounts/<name>/token.json`, mode `0600`, parent dir `0700`.
+  The `default` profile also accepts the pre-multi-account path
+  `$XDG_STATE_HOME/docket/token.json`: on first use it is **copied** (never moved or
+  rewritten) to the profile path, so an existing install upgrades in place. Because
+  the legacy path stays the documented provisioning target, a legacy token that is
+  newer than the profile copy is copied across again — reinstalling a rotated token
+  at the old path is not silently ignored. A normal refresh writes the profile copy,
+  leaving it the newer of the two.
 - Optional `--token-cmd` / `--token-encrypt-cmd` pair so the file can be age- or
   pass-encrypted rather than plaintext on disk.
 - **Refresh must be flock-guarded.** Several agent invocations can run concurrently; two
@@ -181,6 +188,31 @@ func (p *persistingSource) Token() (*oauth2.Token, error) {
 - On `invalid_grant`, exit with code 3 and a message naming the likely cause (password
   change invalidates mail-scoped tokens; six months unused invalidates any token). The agent
   should surface this to you rather than retry.
+
+### Multiple accounts
+
+Named profiles let one docket installation manage several Google accounts without mixing
+credentials. Selection is by the configuration, never by reachability:
+
+- `docket auth add --account <name>` (alias for `auth login --account`) runs the PKCE flow
+  and stores the token under the profile path; `auth import --account <name>` does the same
+  from a piped token. `auth list` reports each profile's verified email and token status;
+  `auth remove --account <name>` deletes one profile (and its lock and directory).
+- Profile names are validated (`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`) to prevent path
+  traversal. A small registry at `$XDG_CONFIG_HOME/docket/accounts.json` records names and
+  verified emails; it and the token files are written atomically (temp file, fsync,
+  rename, directory fsync). Tokens are never printed by `auth list`.
+- `--account` may appear before or after the subcommand; it is resolved once and threaded
+  to the mail and calendar clients, so every command authenticates as the selected profile.
+- Zero profiles: `default` is used and a missing token reports auth-required. One profile:
+  it is selected implicitly. Two or more: `--account` is **required**, even if every other
+  profile is offline or holds an invalid token — docket never chooses a profile from network
+  state, and never falls back to another profile when the selected one cannot authenticate.
+- A missing, unknown, or invalid `--account` is a usage error (exit code 2,
+  `ACCOUNT_SELECTION`), not an auth failure — the fix is a different name, not a login.
+- Calendar ownership (the `[docket]` description marker, §5) is checked with the selected
+  account's client, so an update or delete can only ever reach an event through that
+  profile's credentials.
 
 ### Transport auth
 

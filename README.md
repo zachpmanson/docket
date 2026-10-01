@@ -5,7 +5,7 @@ calendar as composable subcommands with **structured output**, designed to be dr
 an LLM agent on a headless server — not clicked by a human in a terminal.
 
 ```
-docket <auth|mail|cal> <subcommand> [flags]
+docket [--account <name>] <auth|mail|cal> <subcommand> [flags]
 ```
 
 The full design rationale, known limitations, and operator controls live in
@@ -66,8 +66,10 @@ docket auth login
 #    ssh -L 8080:localhost:8080 server   # then open the printed URL in a browser
 ```
 
-Login runs a loopback listener and completes the PKCE/OAuth flow; the token is stored at
-`$XDG_STATE_HOME/docket/token.json` (`0600`). You can also run the flow on a laptop and pipe
+Login runs a loopback listener and completes the PKCE/OAuth flow; the default token is stored at
+`$XDG_STATE_HOME/docket/accounts/default/token.json` (`0600`). If an older
+`$XDG_STATE_HOME/docket/token.json` exists, Docket copies it to the default profile and keeps
+the original file. You can also run the flow on a laptop and pipe
 the token to the server:
 
 ```bash
@@ -76,6 +78,24 @@ cat token.json | docket auth import      # on the server
 ```
 
 Verify with `docket auth whoami`.
+
+### Multiple accounts
+
+The existing token at `$XDG_STATE_HOME/docket/token.json` migrates to the `default` profile
+when first used. Docket keeps the original file during migration. Profiles use separate files
+under `$XDG_STATE_HOME/docket/accounts/<name>/token.json`.
+List profiles and their verified email/status with `docket auth list` (or `docket auth accounts`);
+create a profile with `docket auth add --account work` or `docket auth login --account work`
+(or import a token with `docket auth import --account work`). Remove a profile with
+`docket auth remove --account work`.
+
+Pass `--account <name>` to any account-scoped auth, mail, or calendar command. With zero
+profiles, commands use `default` and report a missing token if none exists. With one configured
+profile, commands select it. With multiple profiles, commands require `--account`; selection
+uses the configured profile list and does not fall back if its token is invalid or unavailable.
+For example: `docket --account work mail search --query "is:unread"`.
+
+Tokens are private credentials. Keep exports secure and delete them after import.
 
 > **Warning:** the borrowed OAuth client is Mozilla Thunderbird's — it can vanish when
 > Thunderbird moves to dynamic client registration, and your Google security page will
@@ -89,9 +109,11 @@ Verify with `docket auth whoami`.
 ### `docket auth`
 | Subcommand | Purpose |
 |---|---|
-| `login` | Start OAuth login (prints tunnel + URL) |
+| `login` / `add --account <name>` | Start OAuth login (prints tunnel + URL) |
 | `whoami` | Resolve the authenticated account address |
-| `export` / `import` | Pipe a token between machines (refresh tokens aren't machine-bound) |
+| `list` / `accounts` | List profiles, verified email addresses, and token status |
+| `remove --account <name>` | Remove a profile token |
+| `export` / `import` | Pipe a token between machines (refresh tokens aren't machine-bound); accept `--account` |
 
 ### `docket mail` — Gmail (REST API)
 | Subcommand | Purpose |
