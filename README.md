@@ -306,9 +306,12 @@ handy for a systemd unit's `Environment=`. Any non-empty value counts as set.
 | `DOCKET_READONLY` | Disables all mail and calendar writes |
 | `DOCKET_MAIL_READONLY` | Disables `mail send`/`reply`/`label` only |
 | `DOCKET_CAL_READONLY` | Disables `cal create`/`update`/`delete` only |
+| `read_only_accounts` in `~/.config/docket/config.toml` | Disables all writes for each listed account name |
 | `DOCKET_CAL_OWN_EVENTS_ONLY` | `cal update`/`delete` refuse anything docket didn't create (via a `[docket]` marker in the event description) — a middle tier between read-only and full write |
 
-These combine into three deployment tiers: fully open, own-events-only, fully closed.
+Global and surface-specific environment controls remain deployment-wide. `read_only_accounts`
+provides per-account read-only access, for example `read_only_accounts = ["archive"]`.
+These controls combine into three deployment tiers: fully open, own-events-only, fully closed.
 A refusal here is `WRITES_DISABLED` / `NOT_OWNED`, exit code 6 — **refused, not failed.**
 
 ---

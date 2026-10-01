@@ -615,10 +615,12 @@ counts as set.
 | `DOCKET_READONLY` | Disables all mail and calendar writes. |
 | `DOCKET_MAIL_READONLY` | Disables `mail send`/`reply`/`label` only. |
 | `DOCKET_CAL_READONLY` | Disables `cal create`/`update`/`delete` only. |
+| `read_only_accounts` in `~/.config/docket/config.toml` | Disables all writes for each listed account name, e.g. `read_only_accounts = ["archive"]`. |
 | `DOCKET_CAL_OWN_EVENTS_ONLY` | `cal update`/`delete` refuse anything not created via `cal create` — see §5 "Soft writes". `cal create` is unaffected. |
 
 A refusal from any of these is `WRITES_DISABLED` (or `NOT_OWNED` for the last one), exit code
-6, same category as a missing `--confirm` — refused, not failed.
+6, same category as a missing `--confirm` — refused, not failed. Account restrictions apply to
+all mail and calendar writes for the selected `--account`; environment restrictions remain global.
 
 ### Self-description
 

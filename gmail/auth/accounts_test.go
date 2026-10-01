@@ -25,6 +25,31 @@ func useStateHome(t *testing.T) string {
 	return root
 }
 
+func TestLoadConfigReadOnlyAccounts(t *testing.T) {
+	root := useStateHome(t)
+	configPath := filepath.Join(root, "config", "docket", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := `read_only_accounts = ["archive", "personal"]
+[provider]
+client_id = "test-client"
+`
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AccountReadOnly("archive") || !cfg.AccountReadOnly("personal") {
+		t.Fatalf("configured read-only accounts not loaded: %#v", cfg.ReadOnlyAccounts)
+	}
+	if cfg.AccountReadOnly("default") {
+		t.Fatal("unlisted account marked read-only")
+	}
+}
+
 func TestLegacyTokenIsDefaultAccount(t *testing.T) {
 	root := useStateHome(t)
 	legacy := filepath.Join(root, "docket", "token.json")

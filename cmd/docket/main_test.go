@@ -88,6 +88,30 @@ func TestAccountSelectionFailureIsUsage(t *testing.T) {
 	}
 }
 
+func TestWriteGateBlocksReadOnlyDefaultAccount(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	configPath := filepath.Join(root, "config", "docket", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := "read_only_accounts = [\"default\"]\n[provider]\nclient_id = \"test-client\"\n"
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var proceed bool
+	var code int
+	stdout, _ := captureStdout(t, func() int {
+		proceed, code = writeGate("mail", "DOCKET_MAIL_READONLY", true, false, nil, "", "")
+		return code
+	})
+	if proceed || code != out.ExitConfirmMissing || !strings.Contains(stdout, "WRITES_DISABLED") {
+		t.Fatalf("writeGate = (%v, %d, %s), want read-only refusal", proceed, code, stdout)
+	}
+}
+
 func TestAttachmentFailuresAreClassifiable(t *testing.T) {
 	cases := []struct {
 		name      string

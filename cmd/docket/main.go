@@ -121,14 +121,27 @@ func newFlagSet(name string) *flag.FlagSet {
 // 7, and §6 exit code 6.
 //
 // DOCKET_READONLY disables all writes; DOCKET_MAIL_READONLY/
-// DOCKET_CAL_READONLY scope it to one surface. Any non-empty value counts
-// as set.
+// DOCKET_CAL_READONLY scope it to one surface. read_only_accounts in
+// config.toml disables writes for selected accounts. Any non-empty env value
+// counts as set.
 func writeGate(kind, disableEnvVar string, confirm, dryRun bool, preview any, rerun, account string) (proceed bool, code int) {
 	if os.Getenv("DOCKET_READONLY") != "" || os.Getenv(disableEnvVar) != "" {
 		return false, out.Fail(out.ExitConfirmMissing, "WRITES_DISABLED",
 			fmt.Sprintf("%s writes are administratively disabled on this deployment "+
 				"(DOCKET_READONLY or %s is set) — a human must unset it to allow this", kind, disableEnvVar),
 			false)
+	}
+	selectedAccount, err := auth.ResolveAccount(account)
+	if err != nil {
+		return false, out.Fail(out.ExitUsage, "ACCOUNT_SELECTION", err.Error(), false)
+	}
+	cfg, err := auth.LoadConfig()
+	if err != nil {
+		return false, out.Fail(out.ExitUsage, "CONFIG_ERROR", err.Error(), false)
+	}
+	if cfg.AccountReadOnly(selectedAccount) {
+		return false, out.Fail(out.ExitConfirmMissing, "WRITES_DISABLED",
+			fmt.Sprintf("%s writes are disabled for account %q by read_only_accounts in config.toml", kind, selectedAccount), false)
 	}
 	if dryRun {
 		return false, out.Emit(map[string]any{"dry_run": true, "preview": preview})

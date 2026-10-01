@@ -8,6 +8,10 @@
 # otherwise.
 default_calendar = "c58fca62a8cdaaf713956f6620bd7c39ef0892e91aa289e603c07f435eee7831@group.calendar.google.com"
 
+# Disable all mail and calendar writes for these named profiles. Read commands
+# remain available. Account names match the --account value exactly.
+# read_only_accounts = ["archive"]
+
 [provider]
 # Values pinned from searchfox.org/comm-central/source/mailnews/base/src/OAuth2Providers.sys.mjs
 # Verify use_pkce and redirect_uri against current source if login ever breaks.

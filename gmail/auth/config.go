@@ -31,8 +31,19 @@ type Provider struct {
 // DefaultCalendar, when set, is the calendar id new/listing operations fall
 // back to when no --calendar flag is given ("primary" otherwise).
 type Config struct {
-	Provider        Provider `toml:"provider"`
-	DefaultCalendar string   `toml:"default_calendar"`
+	Provider         Provider `toml:"provider"`
+	DefaultCalendar  string   `toml:"default_calendar"`
+	ReadOnlyAccounts []string `toml:"read_only_accounts"`
+}
+
+// AccountReadOnly reports whether writes are disabled for the named account.
+func (c *Config) AccountReadOnly(account string) bool {
+	for _, name := range c.ReadOnlyAccounts {
+		if name == account {
+			return true
+		}
+	}
+	return false
 }
 
 // ConfigPath returns the path to config.toml, honoring XDG_CONFIG_HOME.
