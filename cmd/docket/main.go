@@ -27,12 +27,56 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
+type accountContextKey struct{}
+
+func accountFromContext(ctx context.Context) string {
+	account, _ := ctx.Value(accountContextKey{}).(string)
+	return account
+}
+
+// extractAccountFlag accepts --account before or after the command and keeps
+// the subcommand flag sets focused on their own options.
+func extractAccountFlag(args []string) ([]string, string, error) {
+	var filtered []string
+	account := ""
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--account" {
+			if account != "" || i+1 >= len(args) {
+				return nil, "", fmt.Errorf("--account requires one value and may be used once")
+			}
+			i++
+			account = args[i]
+			if account == "" {
+				return nil, "", fmt.Errorf("--account must not be empty")
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "--account=") {
+			if account != "" {
+				return nil, "", fmt.Errorf("--account may be used once")
+			}
+			account = strings.TrimPrefix(arg, "--account=")
+			if account == "" {
+				return nil, "", fmt.Errorf("--account must not be empty")
+			}
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	return filtered, account, nil
+}
+
 func run(args []string) int {
+	args, account, err := extractAccountFlag(args)
+	if err != nil {
+		return usageError(err.Error(), "docket [--account <name>] <auth|mail|cal> <subcommand> [flags]")
+	}
 	if len(args) < 1 {
-		return usageError("missing command", "docket <auth|mail|cal> <subcommand> [flags]")
+		return usageError("missing command", "docket [--account <name>] <auth|mail|cal> <subcommand> [flags]")
 	}
 
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), accountContextKey{}, account)
 
 	switch args[0] {
 	case "auth":
@@ -79,7 +123,7 @@ func newFlagSet(name string) *flag.FlagSet {
 // DOCKET_READONLY disables all writes; DOCKET_MAIL_READONLY/
 // DOCKET_CAL_READONLY scope it to one surface. Any non-empty value counts
 // as set.
-func writeGate(kind, disableEnvVar string, confirm, dryRun bool, preview any, rerun string) (proceed bool, code int) {
+func writeGate(kind, disableEnvVar string, confirm, dryRun bool, preview any, rerun, account string) (proceed bool, code int) {
 	if os.Getenv("DOCKET_READONLY") != "" || os.Getenv(disableEnvVar) != "" {
 		return false, out.Fail(out.ExitConfirmMissing, "WRITES_DISABLED",
 			fmt.Sprintf("%s writes are administratively disabled on this deployment "+
@@ -90,6 +134,9 @@ func writeGate(kind, disableEnvVar string, confirm, dryRun bool, preview any, re
 		return false, out.Emit(map[string]any{"dry_run": true, "preview": preview})
 	}
 	if !confirm {
+		if account != "" {
+			rerun = withOptionalFlag(rerun, "account", account)
+		}
 		return false, out.Fail(out.ExitConfirmMissing, "CONFIRM_REQUIRED",
 			"this is a mutating command and requires --confirm to execute; re-run exactly as "+
 				"shown but with --confirm added: "+rerun, false)
@@ -150,21 +197,32 @@ func readBodyFile(path string) (string, error) {
 
 func runAuth(ctx context.Context, args []string) int {
 	if len(args) < 1 {
-		return usageError("missing auth subcommand", "docket auth <login|whoami|import|export>")
+		return usageError("missing auth subcommand", "docket auth <login|add|whoami|import|export|list|accounts|remove>")
 	}
 	switch args[0] {
 	case "login":
 		return cmdLogin(ctx)
+	case "add":
+		if accountFromContext(ctx) == "" {
+			return usageError("auth add requires --account <name>", "docket auth add --account <name>")
+		}
+		return cmdLogin(ctx)
 	case "whoami":
 		return cmdWhoAmI(ctx)
 	case "import":
-		return cmdImport()
+		return cmdImport(ctx)
 	case "export":
-		return cmdExport()
+		return cmdExport(ctx)
+	case "accounts":
+		return cmdAccounts(ctx)
+	case "list":
+		return cmdAccounts(ctx)
+	case "remove":
+		return cmdRemoveAccount(ctx)
 	default:
 		return usageError(
 			fmt.Sprintf("unknown auth subcommand %q", args[0]),
-			"docket auth <login|whoami|import|export>")
+			"docket auth <login|add|whoami|import|export|list|accounts|remove>")
 	}
 }
 
@@ -227,6 +285,10 @@ func runCal(ctx context.Context, args []string) int {
 // --- auth ---
 
 func cmdLogin(ctx context.Context) int {
+	account, err := auth.LoginAccount(accountFromContext(ctx))
+	if err != nil {
+		return out.Fail(out.ExitUsage, "ACCOUNT_SELECTION", err.Error(), false)
+	}
 	cfg, err := auth.LoadConfig()
 	if err != nil {
 		return out.Fail(out.ExitError, "CONFIG_ERROR", err.Error(), false)
@@ -237,15 +299,30 @@ func cmdLogin(ctx context.Context) int {
 		return out.Fail(out.ExitAuthRequired, "AUTH_FAILED", err.Error(), false)
 	}
 
-	path, err := auth.TokenPath()
+	path, err := auth.AccountTokenPath(account)
 	if err != nil {
 		return out.Fail(out.ExitError, "TOKEN_PATH", err.Error(), false)
 	}
 	if err := auth.SaveToken(tok, path); err != nil {
 		return out.Fail(out.ExitError, "TOKEN_WRITE", err.Error(), false)
 	}
+	if err := auth.RegisterAccount(account, ""); err != nil {
+		return out.Fail(out.ExitError, "ACCOUNT_REGISTER", err.Error(), false)
+	}
 
-	return out.Emit(map[string]any{"status": "logged in"})
+	return out.Emit(map[string]any{"status": "logged in", "account": account})
+}
+
+// accountSelectionFail renders a profile-selection failure as a usage error,
+// so a caller who omitted or mistyped --account is told to fix the invocation
+// rather than to log in again. Reports false for anything else, leaving those
+// errors to the caller's own classification.
+func accountSelectionFail(err error) (int, bool) {
+	var selection *auth.SelectionError
+	if errors.As(err, &selection) {
+		return out.Fail(out.ExitUsage, "ACCOUNT_SELECTION", err.Error(), false), true
+	}
+	return 0, false
 }
 
 func cmdWhoAmI(ctx context.Context) int {
@@ -253,10 +330,13 @@ func cmdWhoAmI(ctx context.Context) int {
 	if err != nil {
 		return out.Fail(out.ExitError, "CONFIG_ERROR", err.Error(), false)
 	}
-	src, err := auth.TokenSource(ctx, cfg)
+	src, err := auth.TokenSourceForAccount(ctx, cfg, accountFromContext(ctx))
 	if err != nil {
+		if code, ok := accountSelectionFail(err); ok {
+			return code
+		}
 		return out.Fail(out.ExitAuthRequired, "AUTH_REQUIRED", err.Error()+
-			" (run `docket auth login` first)", false)
+			" (run `docket auth login --account <name>` first)", false)
 	}
 	who, err := auth.WhoAmIFromToken(ctx, src)
 	if err != nil {
@@ -265,18 +345,76 @@ func cmdWhoAmI(ctx context.Context) int {
 	return out.Emit(who)
 }
 
-func cmdImport() int {
-	if err := auth.ImportToken(os.Stdin); err != nil {
+func cmdImport(ctx context.Context) int {
+	account, err := auth.LoginAccount(accountFromContext(ctx))
+	if err != nil {
+		return out.Fail(out.ExitUsage, "ACCOUNT_SELECTION", err.Error(), false)
+	}
+	if err := auth.ImportTokenForAccount(os.Stdin, account); err != nil {
 		return out.Fail(out.ExitError, "IMPORT_FAILED", err.Error(), false)
 	}
 	return out.Emit(map[string]any{"status": "imported"})
 }
 
-func cmdExport() int {
-	if err := auth.ExportToken(os.Stdout); err != nil {
+func cmdExport(ctx context.Context) int {
+	account, err := auth.ResolveAccount(accountFromContext(ctx))
+	if err != nil {
+		return out.Fail(out.ExitUsage, "ACCOUNT_SELECTION", err.Error(), false)
+	}
+	if err := auth.ExportTokenForAccount(os.Stdout, account); err != nil {
 		return out.Fail(out.ExitError, "EXPORT_FAILED", err.Error(), false)
 	}
 	return out.ExitOK
+}
+
+func cmdAccounts(ctx context.Context) int {
+	accounts, err := auth.Accounts()
+	if err != nil {
+		return out.Fail(out.ExitError, "ACCOUNT_LIST_FAILED", err.Error(), false)
+	}
+	if len(accounts) == 0 {
+		return out.Emit(map[string]any{"accounts": []any{}})
+	}
+	cfg, err := auth.LoadConfig()
+	if err != nil {
+		return out.Fail(out.ExitError, "CONFIG_ERROR", err.Error(), false)
+	}
+	results := make([]map[string]any, 0, len(accounts))
+	for _, account := range accounts {
+		item := map[string]any{"name": account, "status": "invalid"}
+		if email, err := auth.AccountEmail(account); err == nil && email != "" {
+			item["email"] = email
+		}
+		src, err := auth.TokenSourceForAccount(ctx, cfg, account)
+		if err == nil {
+			var who *auth.WhoAmI
+			who, err = auth.WhoAmIFromToken(ctx, src)
+			if err == nil {
+				item["email"] = who.Email
+				item["status"] = "valid"
+				if registerErr := auth.RegisterAccount(account, who.Email); registerErr != nil {
+					item["error"] = registerErr.Error()
+					item["status"] = "invalid"
+				}
+			}
+		}
+		if err != nil {
+			item["error"] = err.Error()
+		}
+		results = append(results, item)
+	}
+	return out.Emit(map[string]any{"accounts": results})
+}
+
+func cmdRemoveAccount(ctx context.Context) int {
+	account := accountFromContext(ctx)
+	if account == "" {
+		return out.Fail(out.ExitUsage, "ACCOUNT_REQUIRED", "docket auth remove requires --account <name>", false)
+	}
+	if err := auth.RemoveAccount(account); err != nil {
+		return out.Fail(out.ExitError, "ACCOUNT_REMOVE_FAILED", err.Error(), false)
+	}
+	return out.Emit(map[string]any{"status": "removed", "account": account})
 }
 
 // --- mail ---
@@ -288,8 +426,11 @@ func mailContext(ctx context.Context) (*gmail.Service, *mail.LabelCache, int) {
 	if err != nil {
 		return nil, nil, out.Fail(out.ExitError, "CONFIG_ERROR", err.Error(), false)
 	}
-	src, err := auth.TokenSource(ctx, cfg)
+	src, err := auth.TokenSourceForAccount(ctx, cfg, accountFromContext(ctx))
 	if err != nil {
+		if code, ok := accountSelectionFail(err); ok {
+			return nil, nil, code
+		}
 		return nil, nil, out.Fail(out.ExitAuthRequired, "AUTH_REQUIRED",
 			err.Error()+" (run `docket auth login` first)", false)
 	}
@@ -635,7 +776,7 @@ func cmdMailSend(ctx context.Context, args []string) int {
 	}
 
 	rerun := fmt.Sprintf("docket mail send --to %q --subject %q --body-file %s --confirm", *to, *subject, *bodyFile)
-	proceed, code := writeGate("mail", "DOCKET_MAIL_READONLY", *confirm, *dryRun, plan, rerun)
+	proceed, code := writeGate("mail", "DOCKET_MAIL_READONLY", *confirm, *dryRun, plan, rerun, accountFromContext(ctx))
 	if !proceed {
 		return code
 	}
@@ -691,7 +832,7 @@ func cmdMailReply(ctx context.Context, args []string) int {
 	if *replyAll {
 		rerun = fmt.Sprintf("docket mail reply --id %s --body-file %s --reply-all --confirm", *id, *bodyFile)
 	}
-	proceed, code := writeGate("mail", "DOCKET_MAIL_READONLY", *confirm, *dryRun, plan, rerun)
+	proceed, code := writeGate("mail", "DOCKET_MAIL_READONLY", *confirm, *dryRun, plan, rerun, accountFromContext(ctx))
 	if !proceed {
 		return code
 	}
@@ -740,7 +881,7 @@ func cmdMailLabel(ctx context.Context, args []string) int {
 	}
 
 	rerun := fmt.Sprintf("docket mail label --id %s --add %q --remove %q --confirm", *id, *add, *remove)
-	proceed, code := writeGate("mail", "DOCKET_MAIL_READONLY", *confirm, *dryRun, plan, rerun)
+	proceed, code := writeGate("mail", "DOCKET_MAIL_READONLY", *confirm, *dryRun, plan, rerun, accountFromContext(ctx))
 	if !proceed {
 		return code
 	}
@@ -779,8 +920,11 @@ func calContext(ctx context.Context, calendarID string) (*caldav.Client, string,
 	if err != nil {
 		return nil, "", out.Fail(out.ExitError, "CONFIG_ERROR", err.Error(), false)
 	}
-	src, err := auth.TokenSource(ctx, cfg)
+	src, err := auth.TokenSourceForAccount(ctx, cfg, accountFromContext(ctx))
 	if err != nil {
+		if code, ok := accountSelectionFail(err); ok {
+			return nil, "", code
+		}
 		return nil, "", out.Fail(out.ExitAuthRequired, "AUTH_REQUIRED",
 			err.Error()+" (run `docket auth login` first)", false)
 	}
@@ -1078,7 +1222,7 @@ func cmdCalCreate(ctx context.Context, args []string) int {
 	rerun = withOptionalFlag(rerun, "rrule", *rruleFlag)
 	rerun = withOptionalFlag(rerun, "idempotency-key", *idempotencyKey)
 	rerun += " --confirm"
-	proceed, code := writeGate("cal", "DOCKET_CAL_READONLY", *confirm, *dryRun, plan, rerun)
+	proceed, code := writeGate("cal", "DOCKET_CAL_READONLY", *confirm, *dryRun, plan, rerun, accountFromContext(ctx))
 	if !proceed {
 		return code
 	}
@@ -1163,7 +1307,7 @@ func cmdCalUpdate(ctx context.Context, args []string) int {
 	rerun = withOptionalFlag(rerun, "start", *start)
 	rerun = withOptionalFlag(rerun, "duration", *duration)
 	rerun += " --confirm"
-	proceed, code := writeGate("cal", "DOCKET_CAL_READONLY", *confirm, *dryRun, plan, rerun)
+	proceed, code := writeGate("cal", "DOCKET_CAL_READONLY", *confirm, *dryRun, plan, rerun, accountFromContext(ctx))
 	if !proceed {
 		return code
 	}
@@ -1208,7 +1352,7 @@ func cmdCalDelete(ctx context.Context, args []string) int {
 	}
 
 	rerun := fmt.Sprintf("docket cal delete --id %s --calendar %s --tz %s --confirm", *id, *calendarID, *tz)
-	proceed, code := writeGate("cal", "DOCKET_CAL_READONLY", *confirm, *dryRun, plan, rerun)
+	proceed, code := writeGate("cal", "DOCKET_CAL_READONLY", *confirm, *dryRun, plan, rerun, accountFromContext(ctx))
 	if !proceed {
 		return code
 	}
