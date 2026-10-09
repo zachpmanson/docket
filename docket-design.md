@@ -461,9 +461,14 @@ docket cal show      --id <event-id> [--calendar primary] --tz <zone>
 docket cal freebusy  --start ... --end ... [--calendar ...] --tz <zone>
 docket cal find-slot --duration 45m --within 5d --hours 09:00-17:00 --tz Australia/Melbourne
 docket cal create    --summary ... --start ... --duration ... [--attendees ...] [--rrule ...] [--confirm]
+docket cal create    --summary ... --start YYYY-MM-DD --end YYYY-MM-DD --all-day [--attendees ...] [--confirm]
 docket cal update    --id <event-id> [--start ...] [--confirm]
 docket cal delete    --id <event-id> [--confirm]
 ```
+
+For an all-day create, `--start` and `--end` are strict `YYYY-MM-DD` dates, `--all-day` is
+required, and `--end` is exclusive (a one-day event uses the following date as its end).
+Timed creates continue to require `--duration` and do not accept `--end`.
 
 `--rrule` takes a raw RFC 5545 recurrence rule value (e.g. `"FREQ=WEEKLY;BYDAY=MO,WE,FR"`,
 `"FREQ=DAILY;COUNT=10"`) — native syntax passthrough via `teambition/rrule-go`'s

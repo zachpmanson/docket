@@ -219,7 +219,8 @@ Notes:
 | `cal show --id <event-id>` | One event (id form `<uid>::<RFC3339 start>`) |
 | `cal freebusy --start ... --end ...` | Busy ranges in a window |
 | `cal find-slot --duration 45m --within 5d --hours 09:00-17:00` | **Find free time** — the highest-value command |
-| `cal create --summary ... --start ... --duration ...` | Create (mutating: `--confirm`) |
+| `cal create --summary ... --start ... --duration ...` | Create a timed event (mutating: `--confirm`) |
+| `cal create --summary ... --start YYYY-MM-DD --end YYYY-MM-DD --all-day` | Create an all-day event (mutating: `--confirm`; end date is exclusive) |
 | `cal update --id <event-id> ...` | Update (mutating: `--confirm`) |
 | `cal delete --id <event-id>` | Delete (mutating: `--confirm`) |
 
@@ -230,7 +231,9 @@ Notes:
   configured timezone, and guessing causes silent off-by-hours bugs.
 - `cal create` accepts `--rrule` as a raw RFC 5545 value (`"FREQ=WEEKLY;BYDAY=MO,WE,FR"`),
   plus optional `--attendees`, `--location`, and `--idempotency-key` (reusing a key on retry
-  prevents duplicate events).
+  prevents duplicate events). For all-day events, pass `--all-day`, date-only `--start` and
+  `--end` values (`YYYY-MM-DD`), and no `--duration`; `--end` is exclusive per calendar
+  convention (for a one-day event, the end date is the following day).
 - Calendar selection: `--calendar` defaults to the account's primary calendar for
   reads, and to `default_calendar` in `config.toml` for writes. `agenda`/`freebusy`/
   `find-slot` accept `--calendar all` to merge every calendar (so busy slots respect
