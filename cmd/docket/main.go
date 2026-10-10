@@ -1173,8 +1173,10 @@ func cmdCalFindSlot(ctx context.Context, args []string) int {
 func cmdCalCreate(ctx context.Context, args []string) int {
 	fs := newFlagSet("cal create")
 	summary := fs.String("summary", "", "event title")
-	start := fs.String("start", "", "start time, e.g. \"tomorrow 14:00\" or RFC3339")
-	duration := fs.String("duration", "", "event length, e.g. \"45m\"")
+	start := fs.String("start", "", "start time (timed) or date YYYY-MM-DD (with --all-day)")
+	duration := fs.String("duration", "", "event length for timed events, e.g. \"45m\"")
+	endDate := fs.String("end", "", "exclusive end date YYYY-MM-DD for --all-day events")
+	allDay := fs.Bool("all-day", false, "create an all-day event; use date-only --start and exclusive --end")
 	location := fs.String("location", "", "location (optional)")
 	attendees := fs.String("attendees", "", "comma-separated attendee email addresses (optional)")
 	rruleFlag := fs.String("rrule", "",
@@ -1189,8 +1191,17 @@ func cmdCalCreate(ctx context.Context, args []string) int {
 		return usageError(err.Error(),
 			"docket cal create --summary ... --start ... --duration ... --tz <zone> [--rrule ...] [--confirm]")
 	}
-	if *summary == "" || *start == "" || *duration == "" {
-		return usageError("--summary, --start, and --duration are all required",
+	if *summary == "" || *start == "" {
+		return usageError("--summary and --start are required",
+			"docket cal create --summary ... --start ... --duration ... --tz <zone> [--confirm]")
+	}
+	if *allDay {
+		if *duration != "" || *endDate == "" {
+			return usageError("--all-day requires --end and cannot be combined with --duration",
+				"docket cal create --summary ... --start YYYY-MM-DD --end YYYY-MM-DD --all-day --tz <zone> [--confirm]")
+		}
+	} else if *duration == "" || *endDate != "" {
+		return usageError("timed events require --duration and cannot use --end",
 			"docket cal create --summary ... --start ... --duration ... --tz <zone> [--confirm]")
 	}
 	loc, code := requireTZ(*tz, "docket cal create --summary ... --start ... --duration ...")
@@ -1198,16 +1209,29 @@ func cmdCalCreate(ctx context.Context, args []string) int {
 		return code
 	}
 
-	startT, err := cal.ParseTime(*start, loc)
-	if err != nil {
-		return usageError(err.Error(), "docket cal create --start ...")
+	var startT, endT time.Time
+	var err error
+	if *allDay {
+		startT, err = cal.ParseDate(*start, loc)
+		if err != nil {
+			return usageError(err.Error(), "docket cal create --start YYYY-MM-DD --end YYYY-MM-DD --all-day ...")
+		}
+		endT, err = cal.ParseDate(*endDate, loc)
+		if err != nil {
+			return usageError(err.Error(), "docket cal create --start YYYY-MM-DD --end YYYY-MM-DD --all-day ...")
+		}
+	} else {
+		startT, err = cal.ParseTime(*start, loc)
+		if err != nil {
+			return usageError(err.Error(), "docket cal create --start ...")
+		}
+		startT = startT.In(loc)
+		dur, err := cal.ParseDuration(*duration)
+		if err != nil {
+			return usageError(err.Error(), "docket cal create --duration 45m ...")
+		}
+		endT = startT.Add(dur)
 	}
-	startT = startT.In(loc)
-	dur, err := cal.ParseDuration(*duration)
-	if err != nil {
-		return usageError(err.Error(), "docket cal create --duration 45m ...")
-	}
-	endT := startT.Add(dur)
 
 	var rr *rrule.ROption
 	if *rruleFlag != "" {
@@ -1222,14 +1246,19 @@ func cmdCalCreate(ctx context.Context, args []string) int {
 		return code
 	}
 
-	plan, err := cal.PrepareCreate(calendarIDResolved, *summary, startT, endT, false,
+	plan, err := cal.PrepareCreate(calendarIDResolved, *summary, startT, endT, *allDay,
 		*location, splitCommaList(*attendees), rr, *rruleFlag, *idempotencyKey)
 	if err != nil {
 		return usageError(err.Error(), "docket cal create --summary ... --start ... --duration ...")
 	}
 
-	rerun := fmt.Sprintf("docket cal create --summary %q --start %q --duration %s --calendar %s --tz %s",
-		*summary, *start, *duration, *calendarID, *tz)
+	rerun := fmt.Sprintf("docket cal create --summary %q --start %q --calendar %s --tz %s",
+		*summary, *start, *calendarID, *tz)
+	if *allDay {
+		rerun += fmt.Sprintf(" --end %q --all-day", *endDate)
+	} else {
+		rerun += fmt.Sprintf(" --duration %s", *duration)
+	}
 	rerun = withOptionalFlag(rerun, "location", *location)
 	rerun = withOptionalFlag(rerun, "attendees", *attendees)
 	rerun = withOptionalFlag(rerun, "rrule", *rruleFlag)

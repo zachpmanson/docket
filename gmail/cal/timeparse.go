@@ -8,6 +8,17 @@ import (
 	"time"
 )
 
+// ParseDate accepts only an ISO date and anchors it at midnight in loc.
+// It is deliberately separate from ParseTime so all-day CLI inputs cannot
+// silently accept times or relative expressions.
+func ParseDate(input string, loc *time.Location) (time.Time, error) {
+	t, err := time.Parse("2006-01-02", strings.TrimSpace(input))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("could not parse date %q — expected YYYY-MM-DD", input)
+	}
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc), nil
+}
+
 // ParseTime accepts an absolute RFC3339 timestamp or a small set of
 // relative forms an agent is likely to produce: "now", "+3d"/"+2h"/"+45m",
 // "today [HH:MM]", "tomorrow [HH:MM]". loc anchors relative dates and
