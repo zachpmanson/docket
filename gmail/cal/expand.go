@@ -119,6 +119,7 @@ func isAllDay(e *ical.Event) bool {
 func eventFromICal(e *ical.Event, uid string, occStart time.Time, allDay bool, calendarID string) Event {
 	summary, _ := e.Props.Text(ical.PropSummary)
 	location, _ := e.Props.Text(ical.PropLocation)
+	description, _ := e.Props.Text(ical.PropDescription)
 	status, _ := e.Status()
 	transp, _ := e.Props.Text(ical.PropTransparency)
 
@@ -147,6 +148,7 @@ func eventFromICal(e *ical.Event, uid string, occStart time.Time, allDay bool, c
 		End:         formatTime(occEnd),
 		AllDay:      allDay,
 		Location:    location,
+		Description: description,
 		Attendees:   attendees,
 		Status:      string(status),
 		Calendar:    calendarID,

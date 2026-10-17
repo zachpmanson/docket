@@ -9,15 +9,16 @@ package cal
 // so the href alone can't address a specific instance. Show re-derives the
 // occurrence by re-querying a window around the embedded timestamp.
 type Event struct {
-	ID        string   `json:"id"`
-	Summary   string   `json:"summary"`
-	Start     string   `json:"start"`
-	End       string   `json:"end"`
-	AllDay    bool     `json:"all_day"`
-	Location  string   `json:"location,omitempty"`
-	Attendees []string `json:"attendees,omitempty"`
-	Status    string   `json:"status"`
-	Calendar  string   `json:"calendar"`
+	ID          string   `json:"id"`
+	Summary     string   `json:"summary"`
+	Start       string   `json:"start"`
+	End         string   `json:"end"`
+	AllDay      bool     `json:"all_day"`
+	Location    string   `json:"location,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Attendees   []string `json:"attendees,omitempty"`
+	Status      string   `json:"status"`
+	Calendar    string   `json:"calendar"`
 
 	// CalendarName is the display name of the event's source calendar,
 	// populated only when the event came from a multi-calendar query

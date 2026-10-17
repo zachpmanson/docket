@@ -276,6 +276,8 @@ func runCal(ctx context.Context, args []string) int {
 	switch args[0] {
 	case "agenda":
 		return cmdCalAgenda(ctx, args[1:])
+	case "search":
+		return cmdCalSearch(ctx, args[1:])
 	case "show":
 		return cmdCalShow(ctx, args[1:])
 	case "freebusy":
@@ -990,6 +992,65 @@ func requireTZ(tzFlag, usage string) (*time.Location, int) {
 			usage+" --tz <IANA timezone, e.g. Australia/Melbourne>")
 	}
 	return loc, out.ExitOK
+}
+
+func cmdCalSearch(ctx context.Context, args []string) int {
+	fs := newFlagSet("cal search")
+	query := fs.String("query", "", "text to find in event summary, description, location, or attendees")
+	start := fs.String("start", "", "inclusive range start (YYYY-MM-DD or RFC3339)")
+	end := fs.String("end", "", "exclusive range end (YYYY-MM-DD or RFC3339)")
+	calendarID := fs.String("calendar", cal.PrimaryCalendar, "calendar id (all = every calendar)")
+	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
+	usage := "docket cal search --query <text> --start <date/time> --end <date/time> [--calendar primary|all] --tz <zone>"
+	if err := fs.Parse(args); err != nil {
+		return usageError(err.Error(), usage)
+	}
+	if strings.TrimSpace(*query) == "" || *start == "" || *end == "" {
+		return usageError("--query, --start, and --end are required", usage)
+	}
+	loc, code := requireTZ(*tz, usage)
+	if code != out.ExitOK {
+		return code
+	}
+	parseBound := func(s string) (time.Time, error) {
+		if len(s) == len("2006-01-02") {
+			return cal.ParseDate(s, loc)
+		}
+		return cal.ParseTime(s, loc)
+	}
+	from, err := parseBound(*start)
+	if err != nil {
+		return usageError(err.Error(), usage)
+	}
+	to, err := parseBound(*end)
+	if err != nil {
+		return usageError(err.Error(), usage)
+	}
+	if !to.After(from) {
+		return usageError("--end must be after --start", usage)
+	}
+	client, target, allCalendars, code := calTarget(ctx, *calendarID)
+	if code != out.ExitOK {
+		return code
+	}
+	var events []cal.Event
+	if allCalendars {
+		events, err = cal.AgendaAll(ctx, client, target, from, to, loc)
+	} else {
+		events, err = cal.Agenda(ctx, client, target, from, to, loc)
+	}
+	if err != nil {
+		return out.Fail(out.ExitError, "CALENDAR_API_ERROR", err.Error(), true)
+	}
+	needle := strings.ToLower(strings.TrimSpace(*query))
+	matches := events[:0]
+	for _, event := range events {
+		text := strings.ToLower(strings.Join([]string{event.Summary, event.Description, event.Location, strings.Join(event.Attendees, " ")}, " "))
+		if strings.Contains(text, needle) {
+			matches = append(matches, event)
+		}
+	}
+	return out.Emit(matches)
 }
 
 func cmdCalAgenda(ctx context.Context, args []string) int {
