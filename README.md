@@ -215,6 +215,7 @@ Notes:
 ### `docket cal` — Google Calendar (CalDAV + client-side RRULE expansion)
 | Subcommand | Purpose |
 |---|---|
+| `cal list` | List calendar IDs and display names for the selected account (no `--tz` needed) |
 | `cal agenda [--days 7]` | Upcoming events |
 | `cal show --id <event-id>` | One event (id form `<uid>::<RFC3339 start>`) |
 | `cal freebusy --start ... --end ...` | Busy ranges in a window |
@@ -226,6 +227,13 @@ Notes:
 
 Notes:
 
+- `docket --account default cal list` discovers the account's CalDAV calendars and
+  returns `data: [{"id":"...","name":"..."}]` in the standard JSON envelope
+  (ID/NAME columns on a terminal). Use the exact `id`, not the display name, with
+  `--calendar <id>` to select a destination. It lists collections only, not events;
+  an empty result is `data: []`. Shared/read-only and virtual calendars may appear:
+  discovery does not imply permission to write. Virtual calendars remain excluded
+  from `--calendar all` event queries. No timezone or confirmation is needed.
 - **`--tz` is required** on every time-parsing command (IANA zone, e.g.
   `Australia/Melbourne`). Google's CalDAV interface can't cheaply report a calendar's
   configured timezone, and guessing causes silent off-by-hours bugs.

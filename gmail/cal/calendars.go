@@ -16,14 +16,30 @@ import (
 // calendar, or Google's opaque id for shared/extra calendars), Name is the
 // calendar's display name.
 type Calendar struct {
-	ID   string
-	Name string
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
-// ListCalendars discovers every calendar the account can see by PROPFINDing
-// the calendar-home collection (depth 1). homeID is the account's calendar
-// id ("primary" or its email address), whose home is /caldav/v2/<homeID>/.
+// ListCalendars returns calendars that support time-range REPORT queries.
+// Virtual calendars are excluded so --calendar all sweeps remain query-safe.
 func ListCalendars(ctx context.Context, client *caldav.Client, homeID string) ([]Calendar, error) {
+	cals, err := DiscoverCalendars(ctx, client, homeID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Calendar, 0, len(cals))
+	for _, c := range cals {
+		if !strings.HasSuffix(c.ID, "@virtual") {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// DiscoverCalendars discovers every calendar exposed by the account's CalDAV
+// home, including virtual/read-only calendars. homeID is the account email.
+// Discovery does not imply write permission on a returned calendar.
+func DiscoverCalendars(ctx context.Context, client *caldav.Client, homeID string) ([]Calendar, error) {
 	home := "/caldav/v2/" + homeID + "/"
 	cals, err := client.FindCalendars(ctx, home)
 	if err != nil {
@@ -40,13 +56,6 @@ func ListCalendars(ctx context.Context, client *caldav.Client, homeID string) ([
 			continue
 		}
 		id := parts[2]
-		// Google's virtual calendars (ids ending @virtual, e.g. the built-in
-		// Holidays calendar) derive their events server-side and don't
-		// answer time-range REPORT queries — skip them rather than failing
-		// half-way through an --calendar all sweep.
-		if strings.HasSuffix(id, "@virtual") {
-			continue
-		}
 		out = append(out, Calendar{ID: id, Name: c.Name})
 	}
 	return out, nil

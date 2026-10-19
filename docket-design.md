@@ -456,6 +456,7 @@ is unaffected) rather than expecting `agenda` to reflect it right away.
 ### Commands
 
 ```
+docket cal list      # selected account's calendar IDs and display names; no timezone
 docket cal agenda    [--days 7] [--calendar primary] --tz <zone>
 docket cal show      --id <event-id> [--calendar primary] --tz <zone>
 docket cal freebusy  --start ... --end ... [--calendar ...] --tz <zone>
@@ -465,6 +466,13 @@ docket cal create    --summary ... --start YYYY-MM-DD --end YYYY-MM-DD --all-day
 docket cal update    --id <event-id> [--start ...] [--confirm]
 docket cal delete    --id <event-id> [--confirm]
 ```
+
+`docket [--account <name>] cal list` returns discovered collections as an array of
+`{id, name}` in the normal envelope (or ID/NAME terminal columns), including shared,
+read-only, and virtual calendars exposed by CalDAV. Pass the exact `id` to
+`--calendar`; display names are not identifiers. Listing does not check write
+permissions or retrieve events. Empty discovery returns `[]`; no `--tz` or
+`--confirm` is required. Existing all-calendar queries still exclude virtual calendars.
 
 For an all-day create, `--start` and `--end` are strict `YYYY-MM-DD` dates, `--all-day` is
 required, and `--end` is exclusive (a one-day event uses the following date as its end).
