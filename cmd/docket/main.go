@@ -271,9 +271,11 @@ func runMail(ctx context.Context, args []string) int {
 func runCal(ctx context.Context, args []string) int {
 	if len(args) < 1 {
 		return usageError("missing cal subcommand",
-			"docket cal <agenda|show|freebusy|find-slot|create|update|delete> [flags]")
+			"docket cal <list|agenda|search|show|freebusy|find-slot|create|update|delete> [flags]")
 	}
 	switch args[0] {
+	case "list":
+		return cmdCalList(ctx, args[1:])
 	case "agenda":
 		return cmdCalAgenda(ctx, args[1:])
 	case "search":
@@ -293,7 +295,7 @@ func runCal(ctx context.Context, args []string) int {
 	default:
 		return usageError(
 			fmt.Sprintf("unknown cal subcommand %q", args[0]),
-			"docket cal <agenda|show|freebusy|find-slot|create|update|delete> [flags]")
+			"docket cal <list|agenda|search|show|freebusy|find-slot|create|update|delete> [flags]")
 	}
 }
 
@@ -992,6 +994,27 @@ func requireTZ(tzFlag, usage string) (*time.Location, int) {
 			usage+" --tz <IANA timezone, e.g. Australia/Melbourne>")
 	}
 	return loc, out.ExitOK
+}
+
+// cmdCalList lists collections, not events; no timezone or write gate is needed.
+func cmdCalList(ctx context.Context, args []string) int {
+	fs := newFlagSet("cal list")
+	const usage = "docket [--account <name>] cal list"
+	if err := fs.Parse(args); err != nil {
+		return usageError(err.Error(), usage)
+	}
+	if fs.NArg() != 0 {
+		return usageError("cal list accepts no positional arguments", usage)
+	}
+	client, homeID, code := calContext(ctx, cal.PrimaryCalendar)
+	if code != out.ExitOK {
+		return code
+	}
+	calendars, err := cal.DiscoverCalendars(ctx, client, homeID)
+	if err != nil {
+		return out.Fail(out.ExitError, "CALENDAR_API_ERROR", err.Error(), true)
+	}
+	return out.Emit(calendars)
 }
 
 func cmdCalSearch(ctx context.Context, args []string) int {
