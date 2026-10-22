@@ -41,28 +41,45 @@ func extractAccountFlag(args []string) ([]string, string, error) {
 	account := ""
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if arg == "--account" {
+		if arg == "--" {
+			filtered = append(filtered, args[i:]...)
+			break
+		}
+		if arg == "--account" || arg == "-account" {
 			if account != "" || i+1 >= len(args) {
 				return nil, "", fmt.Errorf("--account requires one value and may be used once")
 			}
 			i++
 			account = args[i]
-			if account == "" {
-				return nil, "", fmt.Errorf("--account must not be empty")
+			if account == "" || strings.HasPrefix(account, "-") {
+				return nil, "", fmt.Errorf("--account requires an account name, not another flag")
 			}
 			continue
 		}
-		if strings.HasPrefix(arg, "--account=") {
+		if strings.HasPrefix(arg, "--account=") || strings.HasPrefix(arg, "-account=") {
 			if account != "" {
 				return nil, "", fmt.Errorf("--account may be used once")
 			}
-			account = strings.TrimPrefix(arg, "--account=")
+			account = strings.SplitN(arg, "=", 2)[1]
 			if account == "" {
 				return nil, "", fmt.Errorf("--account must not be empty")
 			}
 			continue
 		}
 		filtered = append(filtered, arg)
+		// A flag's value is data, even when it spells --account=work. Match
+		// flag.FlagSet's bool/value rules rather than stealing subject/query/
+		// body-file values and accidentally authorizing a different account.
+		if strings.HasPrefix(arg, "-") && !strings.Contains(arg, "=") {
+			switch strings.TrimLeft(arg, "-") {
+			case "confirm", "dry-run", "verbose", "all", "html", "unread", "reply-all", "all-day", "help", "h":
+			default:
+				if i+1 < len(args) {
+					i++
+					filtered = append(filtered, args[i])
+				}
+			}
+		}
 	}
 	return filtered, account, nil
 }
@@ -113,35 +130,17 @@ func newFlagSet(name string) *flag.FlagSet {
 	return fs
 }
 
-// writeGate enforces the write-safety contract every mutating command
-// shares, in order: an operator kill switch (env var, for a deployment
-// where a human wants to disable writes without touching agent-facing
-// flags), then --dry-run (preview only, nothing executes), then --confirm
-// (required to actually execute). See docket-design.md §1 principles 3 and
-// 7, and §6 exit code 6.
-//
-// DOCKET_READONLY disables all writes; DOCKET_MAIL_READONLY/
-// DOCKET_CAL_READONLY scope it to one surface. read_only_accounts in
-// config.toml disables writes for selected accounts. Any non-empty env value
-// counts as set.
-func writeGate(kind, disableEnvVar string, confirm, dryRun bool, preview any, rerun, account string) (proceed bool, code int) {
-	if os.Getenv("DOCKET_READONLY") != "" || os.Getenv(disableEnvVar) != "" {
-		return false, out.Fail(out.ExitConfirmMissing, "WRITES_DISABLED",
-			fmt.Sprintf("%s writes are administratively disabled on this deployment "+
-				"(DOCKET_READONLY or %s is set) — a human must unset it to allow this", kind, disableEnvVar),
-			false)
+// writeGate keeps confirmation/dry-run separate from the early permission
+// preflight. Recheck the same config snapshot and deployment upper bounds before
+// emitting a preview or executing; never resolve a different account here.
+func writeGate(ctx context.Context, confirm, dryRun bool, preview any, rerun string) (proceed bool, code int) {
+	policy, ok := ctx.Value(policyContextKey{}).(*commandPolicy)
+	if !ok {
+		return false, permissionFailure(fmt.Errorf("command has not passed permission preflight"))
 	}
-	selectedAccount, err := auth.ResolveAccount(account)
-	if err != nil {
-		return false, out.Fail(out.ExitUsage, "ACCOUNT_SELECTION", err.Error(), false)
-	}
-	cfg, err := auth.LoadConfig()
-	if err != nil {
-		return false, out.Fail(out.ExitUsage, "CONFIG_ERROR", err.Error(), false)
-	}
-	if cfg.AccountReadOnly(selectedAccount) {
-		return false, out.Fail(out.ExitConfirmMissing, "WRITES_DISABLED",
-			fmt.Sprintf("%s writes are disabled for account %q by read_only_accounts in config.toml", kind, selectedAccount), false)
+	account := accountFromContext(ctx)
+	if err := policy.config.CheckPermission(account, policy.operation, nil); err != nil {
+		return false, permissionFailure(err)
 	}
 	if dryRun {
 		return false, out.Emit(map[string]any{"dry_run": true, "preview": preview})
@@ -209,6 +208,11 @@ func readBodyFile(path string) (string, error) {
 }
 
 func runAuth(ctx context.Context, args []string) int {
+	var code int
+	ctx, code = authorizeCommand(ctx, "auth", args)
+	if code != out.ExitOK {
+		return code
+	}
 	if len(args) < 1 {
 		return usageError("missing auth subcommand", "docket auth <login|add|whoami|import|export|list|accounts|remove>")
 	}
@@ -240,6 +244,11 @@ func runAuth(ctx context.Context, args []string) int {
 }
 
 func runMail(ctx context.Context, args []string) int {
+	var code int
+	ctx, code = authorizeCommand(ctx, "mail", args)
+	if code != out.ExitOK {
+		return code
+	}
 	if len(args) < 1 {
 		return usageError("missing mail subcommand",
 			"docket mail <search|list|read|thread|attachment|send|reply|label> [flags]")
@@ -269,6 +278,11 @@ func runMail(ctx context.Context, args []string) int {
 }
 
 func runCal(ctx context.Context, args []string) int {
+	var code int
+	ctx, code = authorizeCommand(ctx, "cal", args)
+	if code != out.ExitOK {
+		return code
+	}
 	if len(args) < 1 {
 		return usageError("missing cal subcommand",
 			"docket cal <list|agenda|search|show|freebusy|find-slot|create|update|delete> [flags]")
@@ -306,7 +320,7 @@ func cmdLogin(ctx context.Context) int {
 	if err != nil {
 		return out.Fail(out.ExitUsage, "ACCOUNT_SELECTION", err.Error(), false)
 	}
-	cfg, err := auth.LoadConfig()
+	cfg, err := configFromContext(ctx)
 	if err != nil {
 		return out.Fail(out.ExitError, "CONFIG_ERROR", err.Error(), false)
 	}
@@ -343,7 +357,7 @@ func accountSelectionFail(err error) (int, bool) {
 }
 
 func cmdWhoAmI(ctx context.Context) int {
-	cfg, err := auth.LoadConfig()
+	cfg, err := configFromContext(ctx)
 	if err != nil {
 		return out.Fail(out.ExitError, "CONFIG_ERROR", err.Error(), false)
 	}
@@ -385,14 +399,15 @@ func cmdExport(ctx context.Context) int {
 }
 
 func cmdAccounts(ctx context.Context) int {
-	accounts, err := auth.Accounts()
-	if err != nil {
-		return out.Fail(out.ExitError, "ACCOUNT_LIST_FAILED", err.Error(), false)
+	policy, ok := ctx.Value(policyContextKey{}).(*commandPolicy)
+	if !ok {
+		return permissionFailure(fmt.Errorf("command has not passed permission preflight"))
 	}
+	accounts := policy.accounts
 	if len(accounts) == 0 {
 		return out.Emit(map[string]any{"accounts": []any{}})
 	}
-	cfg, err := auth.LoadConfig()
+	cfg, err := configFromContext(ctx)
 	if err != nil {
 		return out.Fail(out.ExitError, "CONFIG_ERROR", err.Error(), false)
 	}
@@ -439,7 +454,7 @@ func cmdRemoveAccount(ctx context.Context) int {
 // mailContext builds the Gmail client and label cache shared by every mail
 // subcommand. Returns a Fail exit code (never 0) on error.
 func mailContext(ctx context.Context) (*gmail.Service, *mail.LabelCache, int) {
-	cfg, err := auth.LoadConfig()
+	cfg, err := configFromContext(ctx)
 	if err != nil {
 		return nil, nil, out.Fail(out.ExitError, "CONFIG_ERROR", err.Error(), false)
 	}
@@ -793,7 +808,7 @@ func cmdMailSend(ctx context.Context, args []string) int {
 	}
 
 	rerun := fmt.Sprintf("docket mail send --to %q --subject %q --body-file %s --confirm", *to, *subject, *bodyFile)
-	proceed, code := writeGate("mail", "DOCKET_MAIL_READONLY", *confirm, *dryRun, plan, rerun, accountFromContext(ctx))
+	proceed, code := writeGate(ctx, *confirm, *dryRun, plan, rerun)
 	if !proceed {
 		return code
 	}
@@ -849,7 +864,7 @@ func cmdMailReply(ctx context.Context, args []string) int {
 	if *replyAll {
 		rerun = fmt.Sprintf("docket mail reply --id %s --body-file %s --reply-all --confirm", *id, *bodyFile)
 	}
-	proceed, code := writeGate("mail", "DOCKET_MAIL_READONLY", *confirm, *dryRun, plan, rerun, accountFromContext(ctx))
+	proceed, code := writeGate(ctx, *confirm, *dryRun, plan, rerun)
 	if !proceed {
 		return code
 	}
@@ -898,7 +913,7 @@ func cmdMailLabel(ctx context.Context, args []string) int {
 	}
 
 	rerun := fmt.Sprintf("docket mail label --id %s --add %q --remove %q --confirm", *id, *add, *remove)
-	proceed, code := writeGate("mail", "DOCKET_MAIL_READONLY", *confirm, *dryRun, plan, rerun, accountFromContext(ctx))
+	proceed, code := writeGate(ctx, *confirm, *dryRun, plan, rerun)
 	if !proceed {
 		return code
 	}
@@ -917,8 +932,8 @@ func cmdMailLabel(ctx context.Context, args []string) int {
 // feeds the --calendar flag default in every cal subcommand, so the
 // config's default_calendar key is what a bare `docket cal create ...`
 // targets. An explicit --calendar flag still wins.
-func calDefaultCalendar() string {
-	cfg, err := auth.LoadConfig()
+func calDefaultCalendar(ctx context.Context) string {
+	cfg, err := configFromContext(ctx)
 	if err != nil {
 		return cal.PrimaryCalendar
 	}
@@ -933,7 +948,7 @@ func calDefaultCalendar() string {
 // CalDAV interface has no literal "primary" calendar id the way the REST
 // API does. Returns a Fail exit code (never 0) on error.
 func calContext(ctx context.Context, calendarID string) (*caldav.Client, string, int) {
-	cfg, err := auth.LoadConfig()
+	cfg, err := configFromContext(ctx)
 	if err != nil {
 		return nil, "", out.Fail(out.ExitError, "CONFIG_ERROR", err.Error(), false)
 	}
@@ -1265,7 +1280,7 @@ func cmdCalCreate(ctx context.Context, args []string) int {
 	attendees := fs.String("attendees", "", "comma-separated attendee email addresses (optional)")
 	rruleFlag := fs.String("rrule", "",
 		"RFC 5545 recurrence rule, e.g. \"FREQ=WEEKLY;BYDAY=MO,WE,FR\" (optional; makes the event recurring)")
-	calendarID := fs.String("calendar", calDefaultCalendar(), "calendar id")
+	calendarID := fs.String("calendar", calDefaultCalendar(ctx), "calendar id")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
 	idempotencyKey := fs.String("idempotency-key", "",
 		"reuse the same value on retry so a resend doesn't create a duplicate event")
@@ -1348,7 +1363,7 @@ func cmdCalCreate(ctx context.Context, args []string) int {
 	rerun = withOptionalFlag(rerun, "rrule", *rruleFlag)
 	rerun = withOptionalFlag(rerun, "idempotency-key", *idempotencyKey)
 	rerun += " --confirm"
-	proceed, code := writeGate("cal", "DOCKET_CAL_READONLY", *confirm, *dryRun, plan, rerun, accountFromContext(ctx))
+	proceed, code := writeGate(ctx, *confirm, *dryRun, plan, rerun)
 	if !proceed {
 		return code
 	}
@@ -1363,7 +1378,7 @@ func cmdCalCreate(ctx context.Context, args []string) int {
 func cmdCalUpdate(ctx context.Context, args []string) int {
 	fs := newFlagSet("cal update")
 	id := fs.String("id", "", "event id, from `cal agenda` output")
-	calendarID := fs.String("calendar", calDefaultCalendar(), "calendar id")
+	calendarID := fs.String("calendar", calDefaultCalendar(ctx), "calendar id")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
 	summary := fs.String("summary", "", "new title (optional)")
 	start := fs.String("start", "", "new start time (optional; requires --duration too)")
@@ -1433,7 +1448,7 @@ func cmdCalUpdate(ctx context.Context, args []string) int {
 	rerun = withOptionalFlag(rerun, "start", *start)
 	rerun = withOptionalFlag(rerun, "duration", *duration)
 	rerun += " --confirm"
-	proceed, code := writeGate("cal", "DOCKET_CAL_READONLY", *confirm, *dryRun, plan, rerun, accountFromContext(ctx))
+	proceed, code := writeGate(ctx, *confirm, *dryRun, plan, rerun)
 	if !proceed {
 		return code
 	}
@@ -1448,7 +1463,7 @@ func cmdCalUpdate(ctx context.Context, args []string) int {
 func cmdCalDelete(ctx context.Context, args []string) int {
 	fs := newFlagSet("cal delete")
 	id := fs.String("id", "", "event id, from `cal agenda` output")
-	calendarID := fs.String("calendar", calDefaultCalendar(), "calendar id")
+	calendarID := fs.String("calendar", calDefaultCalendar(ctx), "calendar id")
 	tz := fs.String("tz", "", "IANA timezone, e.g. Australia/Melbourne")
 	confirm := fs.Bool("confirm", false, "actually delete (required)")
 	dryRun := fs.Bool("dry-run", false, "preview without deleting")
@@ -1478,7 +1493,7 @@ func cmdCalDelete(ctx context.Context, args []string) int {
 	}
 
 	rerun := fmt.Sprintf("docket cal delete --id %s --calendar %s --tz %s --confirm", *id, *calendarID, *tz)
-	proceed, code := writeGate("cal", "DOCKET_CAL_READONLY", *confirm, *dryRun, plan, rerun, accountFromContext(ctx))
+	proceed, code := writeGate(ctx, *confirm, *dryRun, plan, rerun)
 	if !proceed {
 		return code
 	}

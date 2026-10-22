@@ -31,9 +31,10 @@ type Provider struct {
 // DefaultCalendar, when set, is the calendar id new/listing operations fall
 // back to when no --calendar flag is given ("primary" otherwise).
 type Config struct {
-	Provider         Provider `toml:"provider"`
-	DefaultCalendar  string   `toml:"default_calendar"`
-	ReadOnlyAccounts []string `toml:"read_only_accounts"`
+	Provider         Provider    `toml:"provider"`
+	DefaultCalendar  string      `toml:"default_calendar"`
+	ReadOnlyAccounts []string    `toml:"read_only_accounts"`
+	Permissions      Permissions `toml:"permissions"`
 }
 
 // AccountReadOnly reports whether writes are disabled for the named account.
@@ -112,8 +113,20 @@ func LoadConfig() (*Config, error) {
 	}
 
 	var cfg Config
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+	metadata, err := toml.DecodeFile(path, &cfg)
+	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	if keys := metadata.Undecoded(); len(keys) != 0 {
+		return nil, fmt.Errorf("unknown config keys in %s: %v (check spelling and quote operation names, e.g. \"mail.read\")", path, keys)
+	}
+	if err := cfg.Permissions.validate(); err != nil {
+		return nil, fmt.Errorf("invalid %s: %w", path, err)
+	}
+	for _, account := range cfg.ReadOnlyAccounts {
+		if err := ValidateAccountName(account); err != nil {
+			return nil, fmt.Errorf("read_only_accounts in %s: %w", path, err)
+		}
 	}
 
 	if id := os.Getenv("DOCKET_CLIENT_ID"); id != "" {

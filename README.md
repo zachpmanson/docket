@@ -25,8 +25,8 @@ policy layer has to.
 1. **Structured by default.** JSON when stdout isn't a TTY; a human-readable table when it is.
 2. **Stable IDs, never positions.** `mail read`/`cal show` address messages and events by
    their stable Gmail/Calendar IDs, not by index or sequence number.
-3. **Reads are cheap and safe; writes are explicit.** Every mutating command requires
-   `--confirm` and supports `--dry-run`.
+3. **Reads and writes are permission-gated per account.** Authorized mail/calendar
+   mutations also require `--confirm` and support `--dry-run`.
 4. **No interactive prompts, ever.** Anything that would block on stdin is a failure with a
    distinct exit code.
 5. **Errors are data.** Machine-readable error codes with a `retryable` flag, and messages
@@ -53,15 +53,19 @@ make build
 ## Setup
 
 Auth is **configuration, not code**: the OAuth provider lives in a config file, so the
-provider's borrowed client (`config/config.toml` ships in-repo) can be swapped for your own
+provider's borrowed client (`gmail/config/config.toml` ships in-repo) can be swapped for your own
 registered client without touching code.
 
 ```bash
 # 1. Provision config (already in repo — copy or point XDG_CONFIG_HOME at it)
 mkdir -p ~/.config/docket
-cp config/config.toml ~/.config/docket/config.toml
+cp gmail/config/config.toml ~/.config/docket/config.toml
 
-# 2. Login. On a headless box, docket prints the SSH tunnel to run locally:
+# 2. A human must explicitly grant auth.login (and auth.import/export if needed)
+# in permissions.accounts.default in config.toml. Credentials are denied by default.
+# See permissions.md; restricted agent environments cannot enable token management.
+
+# 3. Login. On a headless box, docket prints the SSH tunnel to run locally:
 docket auth login
 #    ssh -L 8080:localhost:8080 server   # then open the printed URL in a browser
 ```
@@ -299,7 +303,7 @@ Mail error codes a caller may branch on: `RATE_LIMITED`, `AUTH_EXPIRED`, `AUTH_R
 | 3 | Auth required / expired — needs a human |
 | 4 | Not found |
 | 5 | Rate limited or transient — safe to retry with backoff |
-| 6 | Refused: mutating command without `--confirm`, or writes disabled |
+| 6 | Refused: operation permission denied, missing `--confirm`, or legacy write/ownership restriction |
 
 Code 6 is the interesting one: it lets an agent *propose* a write, get a structured refusal
 describing exactly what would have happened, and surface that for approval — rather than
@@ -308,6 +312,29 @@ acting unilaterally.
 ---
 
 ## Operator controls
+
+See **[Per-account operation permissions](permissions.md)** for the complete validated
+TOML schema, every read/write/auth operation, inheritance, account selection and safe
+Nix rollout instructions. **Upgrade note:** omitted mail/calendar write and credential
+permissions now deny; existing reads remain allowed. Existing TOML is never rewritten,
+and `config.json` is not read. `accounts.json` remains metadata, not policy.
+
+For example (configuration illustration, **not a live permission grant**):
+
+```toml
+# Above all table headers:
+read_only_accounts = ["work"]
+
+# After your existing provider settings:
+[permissions.accounts.default]
+"mail.label" = true
+"mail.send" = false
+"mail.reply" = false
+```
+
+This allows personal mail reads + receipt labels while leaving work read-only, **only
+if the deployment's mail kill switch is not set**. Permissions never override the
+privileged runner, read-only ceilings, confirmation or owned-event restrictions.
 
 Writes can be shut off (or scoped) without touching agent-facing flags or redeploying —
 handy for a systemd unit's `Environment=`. Any non-empty value counts as set.
@@ -319,6 +346,11 @@ handy for a systemd unit's `Environment=`. Any non-empty value counts as set.
 | `DOCKET_CAL_READONLY` | Disables `cal create`/`update`/`delete` only |
 | `read_only_accounts` in `~/.config/docket/config.toml` | Disables all writes for each listed account name |
 | `DOCKET_CAL_OWN_EVENTS_ONLY` | `cal update`/`delete` refuse anything docket didn't create (via a `[docket]` marker in the event description) — a middle tier between read-only and full write |
+
+Credential login/import/export/removal also require explicit grants and are blocked by
+any read-only environment flag, the selected account's read-only ceiling, or the
+owned-events-only flag: credentials must not be an escape hatch. The privileged
+runner's `auth whoami`-only allowlist remains a separate boundary.
 
 Global and surface-specific environment controls remain deployment-wide. `read_only_accounts`
 provides per-account read-only access, for example `read_only_accounts = ["archive"]`.
