@@ -57,7 +57,9 @@ func prepareAttachmentOutput(rootPath, path string) (*attachmentOutput, error) {
 		if openErr != nil {
 			return fail(openErr)
 		}
-		parent, err = root.OpenRoot(dir)
+		// Go 1.26.4 mishandles an escaping symlink with a trailing slash.
+		// End in a literal dot component; do not clean internal symlink/.. paths.
+		parent, err = root.OpenRoot(dir + string(os.PathSeparator) + ".")
 		root.Close()
 	} else {
 		// Trusted same-UID CLI use without a configured root preserves arbitrary

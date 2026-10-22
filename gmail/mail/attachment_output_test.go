@@ -72,7 +72,9 @@ func TestRootedAttachmentRejectsEscapesBeforeGmail(t *testing.T) {
 		"../protected/config.toml", config,
 		filepath.Join(outside, "token.json"), filepath.Join(outside, "new-token.json"),
 		filepath.Join(outside, "accounts.json"), filepath.Join(outside, ".profile"),
-		"escape/token.json", "escape/new-token.json", "escape/../image.png", "relative-escape/token.json",
+		// Keep literal separators: trailing-slash parent opens escaped on Go 1.26.4.
+		"escape/token.json", "escape//token.json", "escape/./token.json",
+		"escape/new-token.json", "escape/../image.png", "relative-escape/token.json",
 		"missing/image.png", ".", "..", root, root + string(os.PathSeparator),
 	} {
 		t.Run(path, func(t *testing.T) {
