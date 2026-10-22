@@ -191,7 +191,19 @@ Notes:
   a temporary file and a rename, mode `0600`, so an interrupted fetch leaves no short file
   for a later pass to mistake for a complete one, and a corpus of private mail is not left
   world-readable by whatever umask happened to be in force. An existing file at `--out` is
-  overwritten: a resumed backfill re-fetches what it already has.
+  overwritten: a resumed backfill re-fetches what it already has. A final symlink is
+  replaced, not followed; its target is unchanged.
+- Operators can set `DOCKET_ATTACHMENT_ROOT` to an absolute, dedicated output directory.
+  Relative `--out` paths then resolve beneath it; absolute paths must also be inside it.
+  Parent traversal and symlink escapes are blocked with Go's `os.Root`, with the parent
+  pinned before credentials or Gmail access. The root itself cannot be replaced. Keep
+  config, tokens, registry/state and other sensitive files outside this tree.
+  If any deployment restriction (`DOCKET_READONLY`, `DOCKET_MAIL_READONLY`,
+  `DOCKET_CAL_READONLY`, `DOCKET_CAL_OWN_EVENTS_ONLY`) is nonempty and no root is set,
+  attachment output fails closed with `OUTPUT_WRITE_FAILED`. Unrestricted trusted
+  same-UID CLI use without a root retains arbitrary output paths; it is not a sandbox.
+  Files remain private to the writing UID: a privileged runner's caller is **not**
+  automatically granted read access. See [operator rollout guidance](permissions.md#attachment-output-boundary).
 - `--max-bytes` on `attachment` means the same as everywhere else, `0` included, and defaults
   to 10 MB. Over the cap is `ATTACHMENT_TOO_LARGE`, not a truncated file — half a PNG is not
   a smaller PNG, and once written to disk it is indistinguishable from a whole one. The cap
@@ -204,7 +216,7 @@ Notes:
   months-old metadata acts differently on each: `MESSAGE_NOT_FOUND` (exit 4, the message is
   gone), `PART_NOT_FOUND` (exit 4, the message is there and has no such part — the error
   names the part ids it does have), `ATTACHMENT_UNAVAILABLE` (exit 4, the part is there with
-  no content behind it), and `OUTPUT_WRITE_FAILED` (exit 1, the bytes arrived and the local
+  no content behind it), and `OUTPUT_WRITE_FAILED` (exit 1, the destination was refused or the local
   write failed — nothing about the mailbox is wrong). A rate limit stays `RATE_LIMITED`,
   exit 5, `retryable: true`: reported as a missing part it would be recorded as a permanent
   gap and never asked for again.
@@ -341,6 +353,7 @@ handy for a systemd unit's `Environment=`. Any non-empty value counts as set.
 
 | Variable | Effect |
 |---|---|
+| `DOCKET_ATTACHMENT_ROOT` | Absolute, dedicated attachment output directory; required in restricted deployments (see above) |
 | `DOCKET_READONLY` | Disables all mail and calendar writes |
 | `DOCKET_MAIL_READONLY` | Disables `mail send`/`reply`/`label` only |
 | `DOCKET_CAL_READONLY` | Disables `cal create`/`update`/`delete` only |

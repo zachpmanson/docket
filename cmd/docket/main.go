@@ -715,7 +715,7 @@ func cmdMailAttachment(ctx context.Context, args []string) int {
 	fs := newFlagSet("mail attachment")
 	id := fs.String("id", "", "Gmail message id, from a search/list/thread result")
 	part := fs.String("part", "", "part id of the attachment, from an attachments entry in `mail read` output")
-	outPath := fs.String("out", "", "file to write the bytes to; its directory must already exist")
+	outPath := fs.String("out", "", "file to write; relative to DOCKET_ATTACHMENT_ROOT when set; its directory must already exist")
 	maxBytes := fs.Int("max-bytes", mail.DefaultAttachmentMaxBytes,
 		"refuse an attachment larger than this many bytes; 0 fetches any size")
 	if err := fs.Parse(args); err != nil {
@@ -739,14 +739,29 @@ func cmdMailAttachment(ctx context.Context, args []string) int {
 			usage)
 	}
 
+	opts := mail.FetchOptions{
+		PartID: *part, MaxBytes: *maxBytes, OutPath: *outPath,
+		OutputRoot: os.Getenv("DOCKET_ATTACHMENT_ROOT"),
+	}
+	if opts.OutputRoot == "" {
+		for _, env := range []string{"DOCKET_READONLY", "DOCKET_MAIL_READONLY", "DOCKET_CAL_READONLY", "DOCKET_CAL_OWN_EVENTS_ONLY"} {
+			if os.Getenv(env) != "" {
+				return failMailAttachment(fmt.Errorf("%w: attachment output in a restricted deployment requires an operator-configured DOCKET_ATTACHMENT_ROOT", mail.ErrOutputWrite))
+			}
+		}
+	}
+	output, err := opts.PrepareOutput()
+	if err != nil {
+		return failMailAttachment(err)
+	}
+	defer output.Close()
+
 	svc, _, code := mailContext(ctx)
 	if code != out.ExitOK {
 		return code
 	}
 
-	got, err := mail.FetchAttachment(ctx, svc, *id, mail.FetchOptions{
-		PartID: *part, MaxBytes: *maxBytes, OutPath: *outPath,
-	})
+	got, err := mail.FetchAttachment(ctx, svc, *id, opts)
 	if err != nil {
 		return failMailAttachment(err)
 	}

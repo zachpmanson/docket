@@ -21,7 +21,7 @@ import (
 func permissionSetup(t *testing.T, policy string) {
 	t.Helper()
 	setupCalendarListAccounts(t, "default", "work")
-	for _, env := range []string{"DOCKET_READONLY", "DOCKET_MAIL_READONLY", "DOCKET_CAL_READONLY", "DOCKET_CAL_OWN_EVENTS_ONLY"} {
+	for _, env := range []string{"DOCKET_READONLY", "DOCKET_MAIL_READONLY", "DOCKET_CAL_READONLY", "DOCKET_CAL_OWN_EVENTS_ONLY", "DOCKET_ATTACHMENT_ROOT"} {
 		t.Setenv(env, "")
 	}
 	path, err := auth.ConfigPath()

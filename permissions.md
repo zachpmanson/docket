@@ -168,8 +168,9 @@ rather than assume rebuilding the derivation updates it. Preserve owner/mode and
 the writable `accounts.json` directory; do not make policy agent-writable. Pin the
 reviewed Docket revision in Nix and build/evaluate the runner on both sides of a
 policy change before any human-approved activation. No companion Nix PR is needed
-merely to retain read-only compatibility; no Nix/live config changes are made by
-this Docket implementation.
+for other read-only operations; attachment downloads now fail closed until the
+fixed output root is wired as described below. No Nix/live config changes are made
+by this Docket implementation.
 
 ### kirin / gala (`home/mac-common.nix`)
 
@@ -181,6 +182,56 @@ Do not replace existing provider settings or confuse `accounts.json` with policy
 Human credential-management commands need explicit grants and must be run outside
 restricted agent environments; do not weaken the privileged naboo auth allowlist.
 
+## Attachment output boundary
+
+`mail.attachment` remains an independently authorized read operation, but its local
+output must not become a way to replace runner policy/config symlinks, registry,
+tokens (including newly created token paths), or shell dotfiles. Authorization and
+config/account metadata discovery still run first. After flag validation and
+before token reads/migration, supporting Gmail requests or downloads, the CLI
+validates and opens the destination parent.
+
+Set the operator-only environment variable `DOCKET_ATTACHMENT_ROOT` to an
+**absolute, dedicated directory**. Relative `--out` paths resolve beneath it;
+absolute paths must be within it. All creation, cleanup and atomic rename use a
+pinned `os.Root` parent, not a checked string followed by an unrooted write.
+Traversal/parent symlink escapes and replacing the root itself are refused. The
+final entry may be replaced, including a symlink, but its target is never followed.
+Existing in-root files can be overwritten; output remains mode `0600`. Directory
+creation is an operator responsibility. Do not put config, account registry,
+credentials, dotfiles or other privileged state anywhere in this tree, and do not
+bind-mount such state into it (`os.Root` is not a mount/device sandbox).
+
+If **any** of `DOCKET_READONLY`, `DOCKET_MAIL_READONLY`, `DOCKET_CAL_READONLY` or
+`DOCKET_CAL_OWN_EVENTS_ONLY` is nonempty (including `0`) without an output root,
+attachment output is refused with `OUTPUT_WRITE_FAILED` (exit 1, not retryable).
+This keeps the current restricted runner safe before companion deployment wiring;
+other allowed reads are unchanged. An unrestricted trusted same-UID CLI without
+a root retains arbitrary output paths: its credentials are not a sandbox boundary.
+The root is not a caller flag and must not be caller-overridable in a privileged
+runner; preserve sudo `env_reset` and clear/reject inherited overrides before
+setting the fixed value.
+
+### Companion Nix wiring and delivery limits
+
+The separately reviewed companion naboo Nix change should create
+`/var/lib/docket-agent/attachments` owned by `docket-agent`, mode `0700`, and set
+`DOCKET_ATTACHMENT_ROOT=/var/lib/docket-agent/attachments` inside the trusted
+runner. Keep it separate from protected config/state and ensure its parents are
+operator-controlled. Preserve existing permission/confirmation/ownership ceilings
+and auth allowlists. This source change intentionally modifies no Nix or live
+configuration; until that companion is deployed, attachments are unavailable in
+restricted environments rather than writable to arbitrary runner-owned paths.
+
+A successful JSON result reports a path owned by the protected writing UID. It
+**does not** imply the untrusted caller can read it, nor does this change add a
+file-delivery endpoint, broaden ACLs, copy data across UIDs, or stream private
+attachments to stdout. If delivery is needed, separately review an authenticated,
+account-authorized, narrowly scoped handoff and retention/cleanup policy. Do not
+make the directory/world files readable or silently expose private mail merely
+to make a reported path accessible. Same-UID restricted deployments likewise
+need an operator-selected dedicated root if attachments are required.
+
 ## Verification
 
 `nix develop --command make test vet build` tests both Go modules. Tests cover each
@@ -189,4 +240,8 @@ legacy ceilings, existing TOML preservation/JSON non-precedence, account placeme
 and ambiguity, auth aliases/list preflight, denied sensitive I/O/token migration,
 receipt labelling versus sending, confirmation/dry-run and owned-event refusals.
 HTTP-based CLI tests use fake credentials and local/fake transports, never real
-mailboxes. `nix flake check` and `nix build` validate the package/vendor integration.
+mailboxes. Attachment regressions cover protected config symlinks, registry/token
+and new-token destinations, traversal/absolute/parent-symlink escapes, final
+symlink replacement, pinned-parent swaps, relative/absolute in-root downloads,
+missing deployment roots and refused destinations before token reads/migration
+or network access. `nix flake check` and `nix build` validate the package/vendor integration.
