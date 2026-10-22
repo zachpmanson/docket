@@ -13,8 +13,8 @@ and any lint/build tooling so the dev environment is reproducible across machine
 1. **Structured by default.** JSON when stdout isn't a TTY; human-readable table when it is.
 2. **Stable IDs, never positions.** An agent must be able to `read` a message it saw three
    turns ago. Gmail message IDs and Calendar event IDs are stable; IMAP sequence numbers are not.
-3. **Reads are cheap and safe; writes are explicit.** Every mutating command requires
-   `--confirm` and supports `--dry-run`.
+3. **Reads and writes are permission-gated per account.** Authorized mail/calendar
+   mutations additionally require `--confirm` and support `--dry-run`.
 4. **No interactive prompts, ever.** Anything that would block on stdin is a failure with a
    distinct exit code instead.
 5. **Errors are data.** Machine-readable error codes with a `retryable` flag, so the agent
@@ -213,6 +213,30 @@ credentials. Selection is by the configuration, never by reachability:
 - Calendar ownership (the `[docket]` description marker, §5) is checked with the selected
   account's client, so an update or delete can only ever reach an event through that
   profile's credentials.
+
+### Per-account operation authorization
+
+The complete schema and rollout contract live in **[permissions.md](permissions.md)**.
+Settings stay TOML: nested exact-operation boolean maps require no new dependency or
+JSON migration. Account overrides inherit from operation defaults; absent reads allow
+for compatibility, while absent mail/calendar writes and credential-management grants
+deny (an intentional tightening for legacy configs). Strict decoding rejects unknown
+keys, unknown operations, invalid account names and non-booleans without fallback.
+
+Every domain dispatcher performs the same centralized preflight, before entering a
+handler or reading token contents, migrating legacy tokens, reading body files/stdin,
+constructing a preview or making network requests. Discovery uses account metadata and
+file stats only. Selected account and config are carried in context; clients and the
+confirmation gate use that policy snapshot, not a different implicit selection.
+`auth accounts` preflights every target before probing any, or just the explicitly
+selected profile. Aliases share canonical permissions. Operation denials are structured
+`PERMISSION_DENIED`, exit 6, naming account/operation with human-review guidance.
+
+Legacy read-only switches remain upper bounds; credential export/import/login/removal
+are additionally denied under any read-only or owned-events-only environment restriction
+to avoid escaping it. The runner's separate UID, immutable config, provider-override
+clearing, sudo environment reset and auth allowlist remain mandatory. Library consumers
+holding credentials directly are outside the CLI's authorization boundary.
 
 ### Transport auth
 
@@ -609,7 +633,7 @@ sequence number).
 | 3 | Auth required / expired — needs human |
 | 4 | Not found |
 | 5 | Rate limited or transient — safe to retry with backoff |
-| 6 | Refused: mutating command without `--confirm` |
+| 6 | Refused: permission denied, missing `--confirm`, write or ownership restriction |
 | 1 | Everything else |
 
 Code 6 matters more than it looks. It lets the agent propose an action, get a structured
@@ -634,6 +658,9 @@ counts as set.
 A refusal from any of these is `WRITES_DISABLED` (or `NOT_OWNED` for the last one), exit code
 6, same category as a missing `--confirm` — refused, not failed. Account restrictions apply to
 all mail and calendar writes for the selected `--account`; environment restrictions remain global.
+They are checked at the early permission preflight, before protected reads, not merely at
+the later confirmation gate. Explicit operation grants cannot override them; see
+[permissions.md](permissions.md) for credential-management upper bounds and Nix rollout.
 
 ### Self-description
 

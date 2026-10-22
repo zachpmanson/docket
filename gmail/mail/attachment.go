@@ -7,8 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io"
 
 	"google.golang.org/api/gmail/v1"
 )
@@ -40,7 +39,7 @@ var (
 	// than truncated — see FetchAttachment.
 	ErrAttachmentTooLarge = errors.New("attachment is larger than --max-bytes")
 
-	// ErrOutputWrite: the bytes arrived and the local write failed. Nothing
+	// ErrOutputWrite: the destination was invalid or the local write failed. Nothing
 	// about the mailbox is wrong, so a caller that treats it as a missing
 	// attachment would record a permanent gap for a full disk or a typo'd
 	// directory.
@@ -63,6 +62,24 @@ type FetchOptions struct {
 	PartID   string
 	MaxBytes int
 	OutPath  string
+	// OutputRoot optionally confines all output to this operator-owned directory.
+	// Relative OutPath values resolve beneath it; absolute paths must be inside it.
+	OutputRoot string
+
+	output *attachmentOutput
+}
+
+// PrepareOutput validates the destination and pins its parent directory before
+// credentials or Gmail are accessed. Keep the returned closer open until after
+// FetchAttachment, and do not change these options in between. FetchAttachment
+// does this itself when the caller does not need credential-read preflight.
+func (opts *FetchOptions) PrepareOutput() (io.Closer, error) {
+	output, err := prepareAttachmentOutput(opts.OutputRoot, opts.OutPath)
+	if err != nil {
+		return nil, err
+	}
+	opts.output = output
+	return output.parent, nil
 }
 
 // FetchedAttachment is what a successful fetch reports: where the bytes
@@ -106,6 +123,14 @@ func FetchAttachment(ctx context.Context, svc *gmail.Service, id string, opts Fe
 		return nil, errors.New("--out is required: an attachment's bytes are written to a file, not to stdout")
 	}
 
+	if opts.output == nil {
+		closer, err := opts.PrepareOutput()
+		if err != nil {
+			return nil, err
+		}
+		defer closer.Close()
+	}
+
 	msg, err := svc.Users.Messages.Get(meUser, id).Format("full").Context(ctx).Do()
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -135,7 +160,7 @@ func FetchAttachment(ctx context.Context, svc *gmail.Service, id string, opts Fe
 		return nil, err
 	}
 
-	if err := writeFileAtomic(opts.OutPath, data); err != nil {
+	if err := opts.output.write(data); err != nil {
 		return nil, err
 	}
 
@@ -147,7 +172,7 @@ func FetchAttachment(ctx context.Context, svc *gmail.Service, id string, opts Fe
 		MimeType:  part.MimeType,
 		ContentID: contentID(part),
 		Size:      int64(len(data)),
-		Path:      opts.OutPath,
+		Path:      opts.output.path,
 		SHA256:    hex.EncodeToString(sum[:]),
 	}, nil
 }
@@ -228,40 +253,4 @@ func attachmentPartIDs(part *gmail.MessagePart) []string {
 		ids = append(ids, attachmentPartIDs(child)...)
 	}
 	return ids
-}
-
-// writeFileAtomic writes data to path via a temporary file in the same
-// directory and a rename, so an interrupted fetch leaves no short file behind
-// for a later pass to mistake for a complete one. A bulk fetcher that resumes
-// has no way to tell the two apart otherwise.
-//
-// The mode is 0600: the bytes are private mail, and a corpus directory of
-// them should not be world-readable because one attachment happened to be
-// written by a process with a permissive umask. path is the caller's own,
-// never a filename from the message, so nothing here can be steered by a
-// sender.
-func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".docket-attachment-*")
-	if err != nil {
-		return fmt.Errorf("%w: creating a temporary file in %q: %v "+
-			"(the directory must exist and be writable; docket does not create it)", ErrOutputWrite, dir, err)
-	}
-	defer os.Remove(tmp.Name())
-
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return fmt.Errorf("%w: setting permissions on %q: %v", ErrOutputWrite, tmp.Name(), err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("%w: writing to %q: %v", ErrOutputWrite, tmp.Name(), err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("%w: closing %q: %v", ErrOutputWrite, tmp.Name(), err)
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return fmt.Errorf("%w: moving the attachment into place at %q: %v", ErrOutputWrite, path, err)
-	}
-	return nil
 }

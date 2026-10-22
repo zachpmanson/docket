@@ -59,10 +59,9 @@ func Accounts() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defaultToken, err := AccountTokenPath("default")
-	if err != nil {
-		return nil, err
-	}
+	// Discovery must not read/copy credentials. Permission evaluation resolves
+	// accounts first; legacy migration is deferred until an allowed token use.
+	defaultToken := filepath.Join(filepath.Dir(legacy), "accounts", "default", "token.json")
 	namesSet := make(map[string]bool)
 	if regularFile(defaultToken) || regularFile(legacy) {
 		namesSet["default"] = true

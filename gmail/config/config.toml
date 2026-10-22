@@ -28,3 +28,23 @@ scopes = [
   "https://www.googleapis.com/auth/calendar",
   "email",
 ]
+
+# Per-account operation permissions (see permissions.md).
+# Missing reads allow; missing mail/calendar writes and credential management deny.
+# Keep operation names QUOTED and values boolean. Account entries override defaults;
+# legacy read-only/owned-event deployment policy always remains an upper bound.
+# These are examples, NOT enabled permissions:
+# [permissions.defaults]
+# "mail.attachment" = false
+# [permissions.accounts.default]
+# "mail.label" = true
+# "mail.send" = false
+# "mail.reply" = false
+# "cal.create" = true
+# "cal.update" = true
+# "cal.delete" = true
+# Human-only setup, outside restricted agent deployments:
+# "auth.login" = true
+# "auth.import" = true
+# "auth.export" = true
+# "auth.remove" = true

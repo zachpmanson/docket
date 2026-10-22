@@ -101,14 +101,11 @@ func TestWriteGateBlocksReadOnlyDefaultAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var proceed bool
-	var code int
-	stdout, _ := captureStdout(t, func() int {
-		proceed, code = writeGate("mail", "DOCKET_MAIL_READONLY", true, false, nil, "", "")
-		return code
+	stdout, code := captureStdout(t, func() int {
+		return run([]string{"mail", "label", "--id", "m1", "--add", "Receipt", "--confirm"})
 	})
-	if proceed || code != out.ExitConfirmMissing || !strings.Contains(stdout, "WRITES_DISABLED") {
-		t.Fatalf("writeGate = (%v, %d, %s), want read-only refusal", proceed, code, stdout)
+	if code != out.ExitConfirmMissing || !strings.Contains(stdout, "WRITES_DISABLED") {
+		t.Fatalf("preflight = (%d, %s), want read-only refusal", code, stdout)
 	}
 }
 
@@ -206,6 +203,7 @@ func TestAttachmentFailuresAreClassifiable(t *testing.T) {
 // before any API call. A usage error printed as bare text would be
 // unparseable to the only kind of caller this command has.
 func TestAttachmentUsageFailuresAreEnvelopes(t *testing.T) {
+	setupCalendarListAccounts(t)
 	cases := []struct {
 		name string
 		args []string
