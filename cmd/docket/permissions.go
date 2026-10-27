@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/zachpmanson/docket/gmail/auth"
 	"github.com/zachpmanson/docket/internal/out"
 )
+
+func agentAuthMode() bool { return os.Getenv("DOCKET_AGENT_AUTH") == "1" }
 
 type policyContextKey struct{}
 
@@ -53,6 +56,19 @@ func authorizeCommand(ctx context.Context, domain string, args []string) (contex
 			"docket "+domain+" <"+strings.Join(commands, "|")+"> [flags]")
 	}
 	requested := accountFromContext(ctx)
+	// This guard is pinned by a trusted auth-only runner, never a permission
+	// grant or an override of CheckPermission's deployment ceilings.
+	if agentAuthMode() {
+		switch operation {
+		case "auth.import", "auth.export":
+			return ctx, permissionFailure(&auth.PermissionError{Account: requested, Operation: operation,
+				Code: "PERMISSION_DENIED", Reason: "DOCKET_AGENT_AUTH forbids token import/export"})
+		case "auth.login":
+			if err := auth.CheckNewAccount(requested); err != nil {
+				return ctx, out.Fail(out.ExitUsage, "ACCOUNT_SELECTION", err.Error(), false)
+			}
+		}
+	}
 	if domain == "auth" && (args[0] == "add" || args[0] == "remove") && requested == "" {
 		return ctx, usageError("auth "+args[0]+" requires --account <name>", "docket auth "+args[0]+" --account <name>")
 	}

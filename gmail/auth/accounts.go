@@ -181,22 +181,59 @@ func RemoveAccount(name string) error {
 	if err := unregisterAccount(resolved); err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	return removeAccountFiles(resolved, path, os.Remove)
+}
+
+// RemoveAccountGuarded resolves metadata and removes a profile under the same
+// registry lock used by InstallNewAccount. No stale cleanup can outlive removal
+// and delete credentials installed by a later enrollment. Unlike RemoveAccount,
+// this never migrates or reads default credentials.
+func RemoveAccountGuarded(name string) error {
+	return removeAccountGuarded(name, os.Remove)
+}
+
+func removeAccountGuarded(name string, remove func(string) error) error {
+	if err := ValidateAccountName(name); err != nil {
 		return err
 	}
-	if resolved == "default" {
+	legacy, err := TokenPath()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(filepath.Dir(legacy), "accounts", name, "token.json")
+	return updateRegistry(func(accounts map[string]string) error {
+		if err := checkDirectoryChain(filepath.Dir(path)); err != nil {
+			return err
+		}
+		_, registered := accounts[name]
+		if !registered && !regularFile(path) && !(name == "default" && regularFile(legacy)) {
+			return &SelectionError{fmt.Errorf("account %q is not configured", name)}
+		}
+		if err := removeAccountFiles(name, path, remove); err != nil {
+			return err
+		}
+		delete(accounts, name)
+		return nil
+	})
+}
+
+func removeAccountFiles(name, path string, remove func(string) error) error {
+	if err := remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if name == "default" {
 		legacy, err := TokenPath()
 		if err != nil {
 			return err
 		}
-		if err := os.Remove(legacy); err != nil && !os.IsNotExist(err) {
+		if err := remove(legacy); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
-	if err := os.Remove(path + ".lock"); err != nil && !os.IsNotExist(err) {
+	if err := remove(path + ".lock"); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if err := os.Remove(filepath.Dir(path)); err != nil && !os.IsNotExist(err) {
+	if err := remove(filepath.Dir(path)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil

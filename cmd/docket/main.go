@@ -15,6 +15,7 @@ import (
 
 	"github.com/emersion/go-webdav/caldav"
 	"github.com/teambition/rrule-go"
+	"golang.org/x/oauth2"
 	"google.golang.org/api/gmail/v1"
 
 	"github.com/zachpmanson/docket/gmail/auth"
@@ -235,7 +236,7 @@ func runAuth(ctx context.Context, args []string) int {
 	case "list":
 		return cmdAccounts(ctx)
 	case "remove":
-		return cmdRemoveAccount(ctx)
+		return cmdRemoveAccount(ctx, args[1:])
 	default:
 		return usageError(
 			fmt.Sprintf("unknown auth subcommand %q", args[0]),
@@ -331,6 +332,11 @@ func parseLoginPort(args []string) (int, error) {
 }
 
 func cmdLogin(ctx context.Context, args []string) int {
+	return loginWith(ctx, args, auth.LoginWithPort)
+}
+
+// loginWith keeps tests entirely offline, including successful consent paths.
+func loginWith(ctx context.Context, args []string, login func(context.Context, auth.Provider, int) (*oauth2.Token, error)) int {
 	port, err := parseLoginPort(args)
 	if err != nil {
 		return usageError(err.Error(), "docket auth login [--account <name>] [--port <1-65535>]")
@@ -344,20 +350,31 @@ func cmdLogin(ctx context.Context, args []string) int {
 		return out.Fail(out.ExitError, "CONFIG_ERROR", err.Error(), false)
 	}
 
-	tok, err := auth.LoginWithPort(ctx, cfg.Provider, port)
+	if agentAuthMode() {
+		if err := auth.CheckNewAccount(account); err != nil {
+			return out.Fail(out.ExitUsage, "ACCOUNT_SELECTION", err.Error(), false)
+		}
+	}
+	tok, err := login(ctx, cfg.Provider, port)
 	if err != nil {
 		return out.Fail(out.ExitAuthRequired, "AUTH_FAILED", err.Error(), false)
 	}
 
-	path, err := auth.AccountTokenPath(account)
-	if err != nil {
-		return out.Fail(out.ExitError, "TOKEN_PATH", err.Error(), false)
-	}
-	if err := auth.SaveToken(tok, path); err != nil {
-		return out.Fail(out.ExitError, "TOKEN_WRITE", err.Error(), false)
-	}
-	if err := auth.RegisterAccount(account, ""); err != nil {
-		return out.Fail(out.ExitError, "ACCOUNT_REGISTER", err.Error(), false)
+	if agentAuthMode() {
+		if err := auth.InstallNewAccount(account, tok); err != nil {
+			return out.Fail(out.ExitError, "ACCOUNT_INSTALL", err.Error(), false)
+		}
+	} else {
+		path, err := auth.AccountTokenPath(account)
+		if err != nil {
+			return out.Fail(out.ExitError, "TOKEN_PATH", err.Error(), false)
+		}
+		if err := auth.SaveToken(tok, path); err != nil {
+			return out.Fail(out.ExitError, "TOKEN_WRITE", err.Error(), false)
+		}
+		if err := auth.RegisterAccount(account, ""); err != nil {
+			return out.Fail(out.ExitError, "ACCOUNT_REGISTER", err.Error(), false)
+		}
 	}
 
 	return out.Emit(map[string]any{"status": "logged in", "account": account})
@@ -457,12 +474,28 @@ func cmdAccounts(ctx context.Context) int {
 	return out.Emit(map[string]any{"accounts": results})
 }
 
-func cmdRemoveAccount(ctx context.Context) int {
+func cmdRemoveAccount(ctx context.Context, args []string) int {
+	fs := newFlagSet("auth remove")
+	confirm := fs.Bool("confirm", false, "remove the profile (required in agent auth mode)")
+	if err := fs.Parse(args); err != nil {
+		return usageError(err.Error(), "docket auth remove --account <name> [--confirm]")
+	}
+	if fs.NArg() != 0 {
+		return usageError("unexpected arguments", "docket auth remove --account <name> [--confirm]")
+	}
 	account := accountFromContext(ctx)
 	if account == "" {
 		return out.Fail(out.ExitUsage, "ACCOUNT_REQUIRED", "docket auth remove requires --account <name>", false)
 	}
-	if err := auth.RemoveAccount(account); err != nil {
+	if agentAuthMode() && !*confirm {
+		return out.Fail(out.ExitConfirmMissing, "CONFIRM_REQUIRED",
+			fmt.Sprintf("removing a profile requires --confirm; re-run: docket auth remove --account %q --confirm", account), false)
+	}
+	remove := auth.RemoveAccount
+	if agentAuthMode() {
+		remove = auth.RemoveAccountGuarded
+	}
+	if err := remove(account); err != nil {
 		return out.Fail(out.ExitError, "ACCOUNT_REMOVE_FAILED", err.Error(), false)
 	}
 	return out.Emit(map[string]any{"status": "removed", "account": account})
