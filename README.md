@@ -70,7 +70,14 @@ docket auth login
 #    ssh -L 8080:localhost:8080 server   # then open the printed URL in a browser
 ```
 
-Login runs a loopback listener and completes the PKCE/OAuth flow; the default token is stored at
+Login binds only to `127.0.0.1`, using port `8080` by default. If that port is occupied,
+choose another with `docket auth login --account secondary --port 8081`
+(or `docket auth add --account secondary --port 8081`). `--port` accepts `1`–`65535`;
+the OAuth redirect and printed SSH tunnel both use that port, e.g.
+`ssh -L 8081:localhost:8081 server`. The selected account still requires an explicit
+`auth.login` grant, and all existing read-only/auth-management restrictions apply.
+
+Login completes the PKCE/OAuth flow; the default token is stored at
 `$XDG_STATE_HOME/docket/accounts/default/token.json` (`0600`). If an older
 `$XDG_STATE_HOME/docket/token.json` exists, Docket copies it to the default profile and keeps
 the original file. You can also run the flow on a laptop and pipe
