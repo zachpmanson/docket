@@ -135,6 +135,20 @@ func installNewAccount(name string, tok *oauth2.Token, install func(string, *oau
 				_ = os.Remove(filepath.Dir(path))
 			}
 		}()
+		// Persist the profile's name in accounts/ before publishing a token
+		// whose own directory entry will be synced by installNewToken.
+		parentDir, err := os.Open(parent)
+		if err != nil {
+			return err
+		}
+		syncErr := parentDir.Sync()
+		closeErr := parentDir.Close()
+		if syncErr != nil {
+			return syncErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
 		installed, err = install(path, tok)
 		if err != nil {
 			return err

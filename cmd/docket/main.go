@@ -491,7 +491,11 @@ func cmdRemoveAccount(ctx context.Context, args []string) int {
 		return out.Fail(out.ExitConfirmMissing, "CONFIRM_REQUIRED",
 			fmt.Sprintf("removing a profile requires --confirm; re-run: docket auth remove --account %q --confirm", account), false)
 	}
-	if err := auth.RemoveAccount(account); err != nil {
+	remove := auth.RemoveAccount
+	if agentAuthMode() {
+		remove = auth.RemoveAccountGuarded
+	}
+	if err := remove(account); err != nil {
 		return out.Fail(out.ExitError, "ACCOUNT_REMOVE_FAILED", err.Error(), false)
 	}
 	return out.Emit(map[string]any{"status": "removed", "account": account})

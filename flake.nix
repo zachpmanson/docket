@@ -19,7 +19,7 @@
           # auth-only route; older binaries ignore DOCKET_AGENT_AUTH.
           passthru.agentAuthGuardVersion = 1;
           src = ./.;
-          vendorHash = "sha256-AzRQG0bmpyEN2JUs6xX6FJXSL11rnNr5AjV8Hl3Owcg=";
+          vendorHash = "sha256-O9jaJEwKLFyTBW2QH+mxZm78epBV7JsvaqaVEgNChqQ=";
           # gmail/ is a nested Go module (own go.mod) consumed via the
           # root module's replace; buildGoModule's per-directory build
           # loop must not treat it as subpackages of the root.
