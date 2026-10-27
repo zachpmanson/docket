@@ -88,8 +88,9 @@ Granting one permission never grants a sibling permission.
      Otherwise token export/replacement could escape these restrictions.
 5. Authorized mail/calendar mutations still require `--confirm`; `--dry-run`
    previews only, even with `--confirm`. Neither flag overrides a denial.
-   Existing auth-management workflows remain separate from mail/calendar
-   confirmation: enabling them is a privileged human decision.
+   Existing human auth-management workflows remain separate from mail/calendar
+   confirmation; the trusted agent auth guard below requires confirmed removal.
+   Enabling credential management is a privileged human decision.
 6. `DOCKET_CAL_OWN_EVENTS_ONLY` still enforces the `[docket]` marker for authorized
    calendar updates/deletes, including their previews. Grants cannot override it.
 
@@ -124,10 +125,66 @@ If any is denied the whole listing is refused, not partially returned. Use
 `auth list --account default` to inspect only a permitted profile. With no profiles,
 listing checks the `default` policy and returns an empty list.
 
+## Trusted agent auth guard
+
+`DOCKET_AGENT_AUTH=1` adds handler restrictions for an operator-authorized,
+auth-only execution context. It does **not** change `CheckPermission`, create
+permission grants, clear any legacy ceiling, or sandbox the binary by itself.
+Exactly `1` enables it. A trusted runner must set it unconditionally for its
+login/add/remove branch, reject every other operation there, and prevent caller
+control of environment, executable, config, state paths and credential-owning UID.
+The normal mail/calendar branch must retain its existing read-only/owned-event
+ceilings. If those ceilings are set in the auth context, credential management
+remains denied. Never clear them as a consequence of a caller-supplied flag.
+
+- Login and add require the **original explicit** `--account <new-profile>`,
+  before implicit account resolution. `default` is always reserved, even on an
+  empty installation. Names are local profile labels, not Google identities;
+  the human selects and consents to the identity. This does not enforce distinct
+  Google accounts or identity-level isolation.
+- Registry entries and any existing profile path (including empty directories,
+  invalid tokens and dangling symlinks) block enrollment. Filesystem errors,
+  symlink directories/registry and corrupt registry fail closed. These checks
+  read only registry/name metadata, never credentials, before any OAuth listener.
+- After consent the name is rechecked under the shared registry lock. An exclusive
+  profile-directory creation and synced `0600` temporary-file hard-link publication
+  refuse concurrent replacement. Registry updates use that same lock, preserving
+  unrelated registrations. Local state must support hard links and file locks.
+- If installation succeeds but registration/directory sync fails, the token is
+  preserved and `ACCOUNT_INSTALL` (exit 1, non-retryable) explicitly requests human
+  recovery. There is no automatic credential rollback or overwrite. A failed
+  creation can leave an empty reserved directory after interruption; reconcile it
+  manually. Direct writes by humans/root are outside guarded-flow serialization.
+- Remove requires explicit `--account` and a true `--confirm` (otherwise
+  `CONFIRM_REQUIRED`, exit 6, with no token/registry changes). Policy and all
+  account/legacy ceilings still apply. Successful removal removes the token,
+  registry entry, lock file and empty profile directory, not arbitrary contents;
+  it neither revokes Google consent nor cancels in-flight requests. The name may
+  then be reused, except reserved `default`. Unexpected directory contents can
+  require human cleanup. Import/export always return `PERMISSION_DENIED` (exit 6)
+  under the guard, regardless of operation grants.
+
+Missing/reserved/occupied/unsafe login names return `ACCOUNT_SELECTION` (exit 2)
+before OAuth. Without the guard, authorized human replacement/removal workflows
+remain compatible; `--confirm` is accepted but optional for human removal.
+
+Use the **same immutable config and canonical XDG_CONFIG_HOME/registry** for the
+auth-only and normal contexts. Grant `auth.login` and `auth.remove` explicitly for
+the intended profiles (or defaults covering new names), not import/export. Keep
+`read_only_accounts` and any per-account denials: a new profile inherits its
+name-based policy, so reserve privileged names via explicit denials if needed.
+The operator must review that policy and the runner's exact allowlist together.
+The Nix package advertises `agentAuthGuardVersion = 1`; runners should require
+that capability before enabling this route, since older binaries ignore the guard.
+A separate XDG config home would silently split registry discovery and locking.
+This repository change does not configure or deploy such a runner.
+
 ## Safe rollout / Nix integration
 
 This feature alone grants **no live writes**. No token re-login, format migration,
-new dependencies, or vendor-hash change is required. Review operator-generated
+or new dependency versions are required. The package vendor hash is refreshed for
+the local Gmail module source; force-rebuild `.#default.goModules` when validating
+such source changes rather than trusting a cached fixed-output dependency. Review operator-generated
 TOML with the new strict parser before rolling out (old misspelled/unused keys
 are now errors). Roll out Docket and desired immutable policy together; leaving
 legacy settings unchanged is safe but disables previously allowed writes/auth
@@ -139,9 +196,10 @@ denial disappear without a separate human policy decision.
 The current module copies `gmail/config/config.toml`, replaces the exact
 `# read_only_accounts = ["archive"]` line with `read_only_accounts = ["work"]`,
 and links the TOML into the **separate `docket-agent` user's** config directory.
-That format and replacement remain compatible. The runner's sudo boundary,
-`env_reset`, provider-override clearing and `auth whoami`-only allowlist must stay.
-Do not permit auth export/import/login/removal just because operation grants exist.
+That format and replacement remain compatible. Preserve the runner's sudo
+boundary, `env_reset` and provider-override clearing. Operation grants alone must
+not widen its allowlist. A separately authorized login/add/remove route must use
+the trusted auth guard above; import/export stay excluded.
 
 To retain the prior personal owned-calendar-write functionality after the version
 bump, the **companion Nix source change** (reviewed separately; not performed here)
@@ -160,7 +218,9 @@ Keep `read_only_accounts = ["work"]`, `DOCKET_MAIL_READONLY=1` and
 mail writes. A subsequent, **separately authorized** receipt-labelling policy would
 also grant only `"mail.label" = true` for `default` **and** change the runner's
 mail-wide kill switch; until both are explicitly reviewed, mail writes remain
-disabled. Never grant send/reply or credential-management permissions for the fleet.
+disabled. Never grant send/reply or general credential-management access for the
+fleet. Owner-authorized new-profile login/confirmed removal is limited to the
+separate guarded context described above.
 
 The runner currently only creates its config symlink when absent: a future Nix
 activation must atomically retarget an existing old symlink to the new store file,
