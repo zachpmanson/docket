@@ -218,12 +218,12 @@ func runAuth(ctx context.Context, args []string) int {
 	}
 	switch args[0] {
 	case "login":
-		return cmdLogin(ctx)
+		return cmdLogin(ctx, args[1:])
 	case "add":
 		if accountFromContext(ctx) == "" {
 			return usageError("auth add requires --account <name>", "docket auth add --account <name>")
 		}
-		return cmdLogin(ctx)
+		return cmdLogin(ctx, args[1:])
 	case "whoami":
 		return cmdWhoAmI(ctx)
 	case "import":
@@ -315,7 +315,26 @@ func runCal(ctx context.Context, args []string) int {
 
 // --- auth ---
 
-func cmdLogin(ctx context.Context) int {
+func parseLoginPort(args []string) (int, error) {
+	fs := newFlagSet("auth login")
+	port := fs.Int("port", auth.DefaultLoginPort, "loopback listener port (1-65535)")
+	if err := fs.Parse(args); err != nil {
+		return 0, err
+	}
+	if fs.NArg() != 0 {
+		return 0, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	if *port < 1 || *port > 65535 {
+		return 0, fmt.Errorf("--port must be between 1 and 65535")
+	}
+	return *port, nil
+}
+
+func cmdLogin(ctx context.Context, args []string) int {
+	port, err := parseLoginPort(args)
+	if err != nil {
+		return usageError(err.Error(), "docket auth login [--account <name>] [--port <1-65535>]")
+	}
 	account, err := auth.LoginAccount(accountFromContext(ctx))
 	if err != nil {
 		return out.Fail(out.ExitUsage, "ACCOUNT_SELECTION", err.Error(), false)
@@ -325,7 +344,7 @@ func cmdLogin(ctx context.Context) int {
 		return out.Fail(out.ExitError, "CONFIG_ERROR", err.Error(), false)
 	}
 
-	tok, err := auth.Login(ctx, cfg.Provider)
+	tok, err := auth.LoginWithPort(ctx, cfg.Provider, port)
 	if err != nil {
 		return out.Fail(out.ExitAuthRequired, "AUTH_FAILED", err.Error(), false)
 	}
