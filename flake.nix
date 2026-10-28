@@ -19,15 +19,21 @@
           # auth-only route; older binaries ignore DOCKET_AGENT_AUTH.
           passthru.agentAuthGuardVersion = 1;
           src = ./.;
-          vendorHash = "sha256-O9jaJEwKLFyTBW2QH+mxZm78epBV7JsvaqaVEgNChqQ=";
+          vendorHash = "sha256-xX88uQLkcn8/v8nq42OfxzPnwgwSM8m+4M1e/Y9TYw0=";
           # gmail/ is a nested Go module (own go.mod) consumed via the
           # root module's replace; buildGoModule's per-directory build
           # loop must not treat it as subpackages of the root.
           excludedPackages = [ "gmail" ];
-          # The nested Gmail module is a local replace. buildGoModule's
-          # goModules derivation hashes go.mod/go.sum, so it can retain stale
-          # copies of local replacement sources. Overlay the current source
-          # after vendoring, before the build uses -mod=vendor.
+          # Keep local replacement sources out of the fixed-output dependency
+          # tree: gmail/ implementation edits must not change vendorHash.
+          # Preserve modules.txt and all external dependencies.
+          overrideModAttrs = finalAttrs: previousAttrs: {
+            postBuild = (previousAttrs.postBuild or "") + ''
+              rm -rf vendor/github.com/zachpmanson/docket/gmail
+            '';
+          };
+          # Restore the current local module after copying goModules, before
+          # compiling with -mod=vendor. Never build a cached Gmail source copy.
           postConfigure = ''
             chmod -R u+w vendor/github.com/zachpmanson/docket
             rm -rf vendor/github.com/zachpmanson/docket/gmail

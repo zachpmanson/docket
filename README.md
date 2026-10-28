@@ -50,6 +50,31 @@ go build -o docket ./cmd/docket
 make build
 ```
 
+## Nix dependency checks and CI
+
+```bash
+nix develop --command make test vet  # root and nested gmail module
+nix flake check
+nix build .#default.goModules  # realise first: --rebuild requires an existing output
+nix build .#default.goModules --rebuild
+nix build .#default
+```
+
+The `CI` workflow runs these checks on every pull request and push to `master`.
+**Require the `Nix CI` check in branch protection/rulesets** to make it a merge
+gate (repository configuration, not managed by this flake).
+
+The forced `goModules` rebuild is intentional: a normal package build can reuse a
+fixed-output dependency tree already cached under an outdated `vendorHash`.
+`--rebuild` regenerates the tree even when cached and rejects a hash mismatch.
+
+`overrideModAttrs` removes only the local `gmail/` replacement from the vendored
+dependency output, leaving `modules.txt` and external dependencies hash-checked.
+`postConfigure` then copies the current `gmail/` source into the package build.
+Local implementation-only edits therefore do not need a new `vendorHash`;
+dependency or module-metadata changes still require the correct hash. After such
+changes, force the rebuild above and update `vendorHash` to the reported hash.
+
 ## Setup
 
 Auth is **configuration, not code**: the OAuth provider lives in a config file, so the
