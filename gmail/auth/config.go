@@ -3,8 +3,10 @@
 package auth
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -53,7 +55,12 @@ func ConfigPath() (string, error) {
 // file is never touched -- including the read-only store symlink the Nix
 // module installs for the beltino service account.
 func ensureConfig(path string) error {
-	if _, err := os.Stat(path); err == nil {
+	return ensureConfigFrom(path, bytes.NewReader(config.Default))
+}
+
+// The reader keeps preparation separate from publication, including on errors.
+func ensureConfigFrom(path string, defaults io.Reader) error {
+	if _, err := os.Lstat(path); err == nil {
 		return nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("checking %s: %w", path, err)
@@ -63,22 +70,29 @@ func ensureConfig(path string) error {
 		return fmt.Errorf("creating config dir: %w", err)
 	}
 
-	// O_EXCL rather than a plain create: two docket processes starting at once
-	// must not interleave writes into a half-parsed file. Losing that race is
-	// success, not failure -- the winner wrote the same embedded bytes.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	// Prepare privately on the same filesystem. Publishing with O_EXCL before
+	// writing exposes empty/partial defaults to other goroutines and processes.
+	f, err := os.CreateTemp(filepath.Dir(path), ".config.toml-*")
 	if err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return nil
-		}
-		return fmt.Errorf("creating %s: %w", path, err)
+		return fmt.Errorf("creating temporary config for %s: %w", path, err)
 	}
-	if _, err := f.Write(config.Default); err != nil {
+	defer os.Remove(f.Name())
+	if _, err := io.Copy(f, defaults); err != nil {
 		f.Close()
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
+	}
+
+	// Link atomically publishes the completed file without replacing any
+	// competing winner, operator config, or symlink (even a dangling one).
+	// Rename would clobber the destination; a mutex cannot guard other processes.
+	if err := os.Link(f.Name(), path); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return nil
+		}
+		return fmt.Errorf("publishing %s: %w", path, err)
 	}
 
 	// stderr, never stdout: stdout carries the JSON envelope agents parse.
