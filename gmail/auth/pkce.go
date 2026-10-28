@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -107,18 +109,28 @@ func ExchangeCode(ctx context.Context, p *Pending, code string) (*oauth2.Token, 
 	return tok, nil
 }
 
-// Login runs the complete interactive PKCE flow: it starts a loopback HTTP
-// listener, returns the authorization URL to display, and blocks until the
-// browser redirect completes or ctx is cancelled.
-//
-// On a headless box the caller is expected to print the SSH tunnel command
-// (`ssh -L <port>:localhost:<port> <host>`) alongside AuthURL before the
-// user opens it in a local browser. See docket-design.md §3.
+// DefaultLoginPort is the loopback listener port used by Login.
+const DefaultLoginPort = 8080
+
+// Login runs the complete interactive PKCE flow on DefaultLoginPort.
+// It prints the authorization URL and SSH tunnel command, then blocks until
+// the browser redirect completes or ctx is cancelled.
 func Login(ctx context.Context, p Provider) (*oauth2.Token, error) {
-	// Fixed port so the SSH tunnel command printed below stays valid for the
-	// whole flow: `ssh -L loginPort:localhost:loginPort <host>`.
-	const loginPort = 8080
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", loginPort))
+	return LoginWithPort(ctx, p, DefaultLoginPort)
+}
+
+// LoginWithPort is Login with an explicit loopback listener port (1-65535).
+// The redirect URI and printed SSH tunnel use the same port. The listener
+// always binds to 127.0.0.1; the port cannot change the bind address.
+func LoginWithPort(ctx context.Context, p Provider, port int) (*oauth2.Token, error) {
+	return loginWithPort(ctx, p, port, net.Listen, os.Stdout)
+}
+
+func loginWithPort(ctx context.Context, p Provider, loginPort int, listen func(string, string) (net.Listener, error), output io.Writer) (*oauth2.Token, error) {
+	if loginPort < 1 || loginPort > 65535 {
+		return nil, fmt.Errorf("login port must be between 1 and 65535")
+	}
+	listener, err := listen("tcp", fmt.Sprintf("127.0.0.1:%d", loginPort))
 	if err != nil {
 		return nil, fmt.Errorf("starting loopback listener on :%d: %w", loginPort, err)
 	}
@@ -158,10 +170,10 @@ func Login(ctx context.Context, p Provider) (*oauth2.Token, error) {
 	go srv.Serve(listener)
 	defer srv.Shutdown(context.Background())
 
-	fmt.Printf("On a headless box, tunnel first:\n  ssh -L %d:localhost:%d <host>\n\n", loginPort, loginPort)
-	fmt.Println("Then open this URL in a browser:")
-	fmt.Println(pending.AuthURL())
-	fmt.Printf("\nWaiting for redirect on %s ...\n", redirectURI)
+	fmt.Fprintf(output, "On a headless box, tunnel first:\n  ssh -L %d:localhost:%d <host>\n\n", loginPort, loginPort)
+	fmt.Fprintln(output, "Then open this URL in a browser:")
+	fmt.Fprintln(output, pending.AuthURL())
+	fmt.Fprintf(output, "\nWaiting for redirect on %s ...\n", redirectURI)
 
 	select {
 	case <-ctx.Done():

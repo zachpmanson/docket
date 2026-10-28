@@ -88,14 +88,21 @@ cp gmail/config/config.toml ~/.config/docket/config.toml
 
 # 2. A human must explicitly grant auth.login (and auth.import/export if needed)
 # in permissions.accounts.default in config.toml. Credentials are denied by default.
-# See permissions.md; restricted agent environments cannot enable token management.
+# See permissions.md; ordinary restricted agent environments cannot enable token management.
 
 # 3. Login. On a headless box, docket prints the SSH tunnel to run locally:
 docket auth login
 #    ssh -L 8080:localhost:8080 server   # then open the printed URL in a browser
 ```
 
-Login runs a loopback listener and completes the PKCE/OAuth flow; the default token is stored at
+Login binds only to `127.0.0.1`, using port `8080` by default. If that port is occupied,
+choose another with `docket auth login --account secondary --port 8081`
+(or `docket auth add --account secondary --port 8081`). `--port` accepts `1`–`65535`;
+the OAuth redirect and printed SSH tunnel both use that port, e.g.
+`ssh -L 8081:localhost:8081 server`. The selected account still requires an explicit
+`auth.login` grant, and all existing read-only/auth-management restrictions apply.
+
+Login completes the PKCE/OAuth flow; the default token is stored at
 `$XDG_STATE_HOME/docket/accounts/default/token.json` (`0600`). If an older
 `$XDG_STATE_HOME/docket/token.json` exists, Docket copies it to the default profile and keeps
 the original file. You can also run the flow on a laptop and pipe
@@ -125,6 +132,38 @@ uses the configured profile list and does not fall back if its token is invalid 
 For example: `docket --account work mail search --query "is:unread"`.
 
 Tokens are private credentials. Keep exports secure and delete them after import.
+
+### Trusted agent auth context
+
+A deployment may opt into `DOCKET_AGENT_AUTH=1` **only in a trusted, auth-only
+runner** allowing exactly `auth login`, `auth add`, and `auth remove`. This is an
+additional restriction, not a permission grant: immutable policy must explicitly
+grant `auth.login` / `auth.remove`, and all existing read-only/owned-event ceilings
+still win. Keep the normal mail/calendar runner and its ceilings unchanged. The
+runner must pin HOME, XDG paths, provider/config and this guard outside the agent's
+control; use the **same config directory and writable account registry** for both
+contexts. Do not expose the raw credential-owning UID or a general command runner.
+
+In this context, login/add requires an explicit **new** `--account` profile name;
+`default` is reserved. Registered names, existing profile directories (even empty
+ones), symlinks and invalid metadata are refused before OAuth. `--account` is a
+local label, **not an email selector**: a human chooses the Google identity and
+consents in the browser. Two different labels can represent the same identity.
+Consent tokens are installed atomically without replacing any existing token,
+including when another login completes during consent. No token is printed.
+
+Removal requires `docket auth remove --account <name> --confirm`; omitting
+confirmation changes nothing. It deletes local credentials/registry metadata,
+not Google's authorization, and does not cancel already running API calls.
+Import/export are always refused under this guard. Normal human CLI behavior
+without the guard still permits authorized reauthentication and removal without
+`--confirm`.
+
+A failure after token installation preserves the token and reports human recovery
+required; do not overwrite or blindly retry. A human should inspect local state
+and reconcile the registry (or deliberately remove the profile) before retrying.
+The no-clobber guarantee covers cooperating guarded flows, not root or a human
+with direct credential write access. Trusted deployment details: [permissions.md](permissions.md#trusted-agent-auth-guard).
 
 > **Warning:** the borrowed OAuth client is Mozilla Thunderbird's — it can vanish when
 > Thunderbird moves to dynamic client registration, and your Google security page will

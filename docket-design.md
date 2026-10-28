@@ -142,7 +142,10 @@ URL + a `Pending` (state to verify, verifier to exchange), send the user to
 `ExchangeCode(ctx, pending, code)` and persist with `SaveToken`. For the Thunderbird
 client the redirect URI must stay a pathless `http://localhost:<port>` (Google matches
 loopback redirects by host+port). `docket auth login` is the same flow wrapped around a
-temporary `:8080` listener.
+temporary `127.0.0.1:8080` listener. `--port <1-65535>` selects another listener
+port for `auth login` and its `auth add` alias; the pathless localhost redirect URI
+and printed SSH tunnel use the selected port. Reusable callers can use
+`LoginWithPort(ctx, provider, port)`; `Login(ctx, provider)` retains port 8080.
 
 Request `access_type=offline` and `prompt=consent`. Without the latter you won't get a
 refresh token on re-authorization, which produces a token that mysteriously dies after an hour.

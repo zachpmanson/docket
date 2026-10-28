@@ -15,6 +15,9 @@
         packages.default = pkgs.buildGoModule {
           pname = "docket";
           version = "0.1.0";
+          # Trusted runners must require this capability before enabling the
+          # auth-only route; older binaries ignore DOCKET_AGENT_AUTH.
+          passthru.agentAuthGuardVersion = 1;
           src = ./.;
           vendorHash = "sha256-xX88uQLkcn8/v8nq42OfxzPnwgwSM8m+4M1e/Y9TYw0=";
           # gmail/ is a nested Go module (own go.mod) consumed via the
