@@ -48,6 +48,7 @@ type ReactionInspection struct {
 	InReplyTo       []string            `json:"in_reply_to,omitempty"` // complete repeated raw values unless incomplete
 	TargetMessageID string              `json:"target_message_id,omitempty"`
 	Candidates      []ReactionCandidate `json:"candidates,omitempty"`
+	Fallbacks       []ReactionFallback  `json:"fallbacks,omitempty"`
 	Reasons         []string            `json:"reasons,omitempty"`
 }
 
@@ -275,10 +276,17 @@ func (w *reactionWalker) walk(p *gmail.MessagePart, path string, depth int) {
 		if p.Body != nil && (p.Body.Data != "" || p.Body.AttachmentId != "" || p.Body.Size != 0) {
 			w.strict = false
 		}
-	} else if mt == "text/plain" && depth == 1 && len(p.Parts) == 0 {
-		w.plain++
-	} else if mt == "text/html" && depth == 1 && len(p.Parts) == 0 {
-		w.html++
+	} else if (mt == "text/plain" || mt == "text/html") && depth == 1 && len(p.Parts) == 0 {
+		fallback := inspectReactionFallback(p, path, mt, params["charset"])
+		w.result.Fallbacks = append(w.result.Fallbacks, fallback)
+		if !fallback.BodyComplete {
+			w.strict = false
+		}
+		if mt == "text/plain" {
+			w.plain++
+		} else {
+			w.html++
+		}
 	} else {
 		w.strict = false
 	}

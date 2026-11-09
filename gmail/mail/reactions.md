@@ -12,7 +12,14 @@ The inspection walker is separate from that legacy body decoder.
 
 - `ReactionInspection`: `Version` (currently `ReactionInspectionVersion=1`),
   `EmojiVersion`, `Status`, `Layout`, repeated raw `InReplyTo` values,
-  `TargetMessageID`, `Candidates`, `Reasons`.
+  `TargetMessageID`, `Candidates`, `Fallbacks`, `Reasons`.
+- `ReactionFallback`: direct alternative `PartPath`, `MIMEType`, `Charset`,
+  `DecodedBytes` and `BodyComplete`. No fallback text is copied into this sidecar.
+- `ValidateReactionInspection(*ReactionInspection) error` revalidates the
+  versioned contract, target/header consistency, strict layout evidence, original
+  candidate JSON and exact Unicode sequence. Consumers should call it before
+  classifying a deserialized inspection; nil/unknown/inconsistent evidence fails
+  closed. It does not authenticate an arbitrary serialized assertion.
 - `ReactionCandidate`: adapter `Format`, stable tree `PartPath` (root `0`,
   zero-indexed children `0.0`, ...), provider `PartID`, parsed `MIMEType`, `Charset`,
   `Disposition`, original `ContentTypeHeaders`/`DispositionHeaders`, external
@@ -81,7 +88,10 @@ inspection incomplete). No target is fetched or resolved here.
 `Layout` is independent of payload validity: `top-level` means a sole Gmail JSON
 leaf; `alternative` means a root multipart/alternative with one direct JSON leaf
 and at most one plain and one HTML leaf, no other parts, attachment dispositions,
-filenames, unknown dispositions or container body. All other layouts are `other`.
+filenames, unknown dispositions or container body. Fallback leaves must be locally
+available, fully decoded UTF-8/ASCII with consistent sizes and at most 64 KiB each;
+unavailable/external/malformed/oversized alternatives downgrade to `other` even
+when the reaction payload itself is a valid candidate. All other layouts are `other`.
 Only a valid, resolved, authorized candidate in a strict layout could qualify for
 a downstream reaction-only display policy. Generic multipart/mixed, nested
 alternatives, extra authored siblings and attachments stay ordinary visible mail,
@@ -95,7 +105,9 @@ bytes, 16 occurrences per relevant header, 2,048 bytes per API MIME type.
 Limits fail closed with `incomplete` and diagnostics, never `none`. Oversized
 payloads are not partially parsed. Nil/empty bodies, size mismatches, or any
 `body.attachmentId` mean incomplete: that API field denotes external storage,
-not MIME attachment disposition. No new network request is made. Candidate
+not MIME attachment disposition. Fallbacks have a separate 64 KiB-per-leaf bound;
+incomplete fallbacks remain recorded and veto strict layout without consuming
+or fetching them. No new network request is made. Candidate
 body bytes are retained only when valid UTF-8; invalid bytes are diagnosed rather
 than silently replaced. Evidence headers may be clipped at the byte budget,
 explicitly making the whole inspection incomplete. Missing old evidence requires
