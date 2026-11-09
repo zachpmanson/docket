@@ -1,4 +1,4 @@
-# Received-reaction evidence (inspection v1)
+# Received-reaction evidence (inspection v2)
 
 `Message.ReactionInspection` and full (`IncludeHTML=true`) `ThreadMessage.ReactionInspection`
 are additive `reaction_inspection` JSON sidecars. `Read` always inspects the existing
@@ -10,7 +10,7 @@ The inspection walker is separate from that legacy body decoder.
 
 ## Exported contract
 
-- `ReactionInspection`: `Version` (currently `ReactionInspectionVersion=1`),
+- `ReactionInspection`: `Version` (currently `ReactionInspectionVersion=2`),
   `EmojiVersion`, `Status`, `Layout`, repeated raw `InReplyTo` values,
   `TargetMessageID`, `Candidates`, `Fallbacks`, `Reasons`.
 - `ReactionFallback`: direct alternative `PartPath`, `MIMEType`, `Charset`,
@@ -19,7 +19,10 @@ The inspection walker is separate from that legacy body decoder.
   versioned contract, target/header consistency, strict layout evidence, original
   candidate JSON and exact Unicode sequence. Consumers should call it before
   classifying a deserialized inspection; nil/unknown/inconsistent evidence fails
-  closed. It does not authenticate an arbitrary serialized assertion.
+  closed. Version 1 cannot establish fallback completeness and is rejected for
+  classification. Candidate and fallback paths must cover all direct alternative
+  positions without gaps. The Gmail payload version remains 1. This evidence
+  contract does not authenticate an arbitrary serialized assertion.
 - `ReactionCandidate`: adapter `Format`, stable tree `PartPath` (root `0`,
   zero-indexed children `0.0`, ...), provider `PartID`, parsed `MIMEType`, `Charset`,
   `Disposition`, original `ContentTypeHeaders`/`DispositionHeaders`, external
@@ -33,7 +36,7 @@ The inspection walker is separate from that legacy body decoder.
 Example (other evidence fields omitted here):
 
 ```json
-{"reaction_inspection":{"version":1,"emoji_version":"Unicode Emoji 16.0 (fully-qualified)","status":"candidate","layout":"alternative","in_reply_to":["<target@example.test>"],"target_message_id":"<target@example.test>","candidates":[{"format":"gmail-email-reaction/v1","part_path":"0.1","mime_type":"text/vnd.google.email-reaction+json","body":"{\"version\":1,\"emoji\":\"❤️\"}","body_complete":true,"version":1,"emoji":"❤️","status":"candidate"}]}}
+{"reaction_inspection":{"version":2,"emoji_version":"Unicode Emoji 16.0 (fully-qualified)","status":"candidate","layout":"top-level","in_reply_to":["<target@example.test>"],"target_message_id":"<target@example.test>","candidates":[{"format":"gmail-email-reaction/v1","part_path":"0","mime_type":"text/vnd.google.email-reaction+json","body":"{\"version\":1,\"emoji\":\"❤️\"}","body_complete":true,"version":1,"emoji":"❤️","status":"candidate"}]}}
 ```
 
 `candidate` means validated sender-supplied structural evidence, **not** an

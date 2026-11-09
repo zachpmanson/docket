@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	ReactionInspectionVersion = 1
+	ReactionInspectionVersion = 2
 	ReactionEmojiVersion      = "Unicode Emoji 16.0 (fully-qualified)"
 	GmailReactionFormat       = "gmail-email-reaction/v1"
 	gmailReactionMIME         = "text/vnd.google.email-reaction+json"

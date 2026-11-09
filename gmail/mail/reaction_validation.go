@@ -69,6 +69,7 @@ func ValidateReactionInspection(r *ReactionInspection) error {
 	if c.Format != GmailReactionFormat || c.Status != ReactionStatusCandidate || c.Reason != "" ||
 		c.Version != 1 || !c.BodyComplete || c.AttachmentID != "" || len(c.Body) > maxReactionPayloadBytes ||
 		c.MIMEType != gmailReactionMIME || len(c.PartID) > maxReactionEvidenceBytes ||
+		len(c.Charset) > 128 || len(c.Disposition) > 128 || len(c.PartPath) > 16 ||
 		len(c.ContentTypeHeaders) > 1 || len(c.DispositionHeaders) > 1 {
 		return fmt.Errorf("unsupported or incomplete reaction candidate")
 	}
@@ -97,7 +98,7 @@ func ValidateReactionInspection(r *ReactionInspection) error {
 		p.Headers = append(p.Headers, &gmail.MessagePartHeader{Name: "Content-Disposition", Value: h})
 	}
 	parsed := inspectReactions(p)
-	if parsed.Status != ReactionStatusCandidate || len(parsed.Candidates) != 1 ||
+	if parsed.Status != ReactionStatusCandidate || parsed.Layout != "top-level" || len(parsed.Candidates) != 1 ||
 		parsed.TargetMessageID != r.TargetMessageID || parsed.Candidates[0].Emoji != c.Emoji ||
 		parsed.Candidates[0].Charset != c.Charset || parsed.Candidates[0].Disposition != c.Disposition {
 		return fmt.Errorf("reaction payload and evidence disagree")
@@ -116,11 +117,16 @@ func ValidateReactionInspection(r *ReactionInspection) error {
 		for _, f := range r.Fallbacks {
 			if !directReactionPart(f.PartPath) || seen[f.PartPath] || types[f.MIMEType] ||
 				(f.MIMEType != "text/plain" && f.MIMEType != "text/html") || !f.BodyComplete ||
-				f.DecodedBytes < 0 || f.DecodedBytes > maxReactionFallbackBytes ||
+				len(f.Charset) > 128 || len(f.PartPath) > 16 || f.DecodedBytes < 0 || f.DecodedBytes > maxReactionFallbackBytes ||
 				(f.Charset != "" && !strings.EqualFold(f.Charset, "utf-8") && !strings.EqualFold(f.Charset, "us-ascii")) {
 				return fmt.Errorf("incomplete or contradictory reaction fallback")
 			}
 			seen[f.PartPath], types[f.MIMEType] = true, true
+		}
+		for i := 0; i < len(seen); i++ {
+			if !seen["0."+strconv.Itoa(i)] {
+				return fmt.Errorf("reaction alternative has unaccounted parts")
+			}
 		}
 	default:
 		return fmt.Errorf("reaction layout does not establish reaction-only content")

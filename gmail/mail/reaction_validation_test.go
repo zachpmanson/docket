@@ -61,6 +61,21 @@ func TestValidateReactionInspectionRefusesContradictions(t *testing.T) {
 		change func(*ReactionInspection)
 	}{
 		{"version", func(r *ReactionInspection) { r.Version++ }},
+		{"unsafe old version", func(r *ReactionInspection) { r.Version = 1; r.Fallbacks = nil }},
+		{"omitted fallback", func(r *ReactionInspection) { r.Fallbacks = nil }},
+		{"impossible candidate position", func(r *ReactionInspection) { r.Candidates[0].PartPath = "0.127" }},
+		{"unsupported disposition", func(r *ReactionInspection) {
+			r.Candidates[0].Disposition = "form-data"
+			r.Candidates[0].DispositionHeaders = []string{"form-data"}
+		}},
+		{"unsupported top-level disposition", func(r *ReactionInspection) {
+			r.Layout = "top-level"
+			r.Fallbacks = nil
+			r.Candidates[0].PartPath = "0"
+			r.Candidates[0].Disposition = "form-data"
+			r.Candidates[0].DispositionHeaders = []string{"form-data"}
+		}},
+		{"missing fallback position", func(r *ReactionInspection) { r.Fallbacks[0].PartPath = "0.2" }},
 		{"none", func(r *ReactionInspection) { r.Status = ReactionNone }},
 		{"emoji version", func(r *ReactionInspection) { r.EmojiVersion = "unknown" }},
 		{"target", func(r *ReactionInspection) { r.TargetMessageID = "<other@example.test>" }},
