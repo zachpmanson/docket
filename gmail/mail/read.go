@@ -65,13 +65,14 @@ func Read(ctx context.Context, svc *gmail.Service, labels *LabelCache, id string
 	r := render(plain, markup, opts)
 
 	m := &Message{
-		Envelope:      envelopeFromMessage(msg, labels),
-		Body:          r.body,
-		Truncated:     r.truncated,
-		HTMLStatus:    r.status,
-		BodyHTML:      r.html,
-		HTMLTruncated: r.htmlTruncated,
-		Attachments:   attachments,
+		Envelope:           envelopeFromMessage(msg, labels),
+		Body:               r.body,
+		Truncated:          r.truncated,
+		HTMLStatus:         r.status,
+		BodyHTML:           r.html,
+		HTMLTruncated:      r.htmlTruncated,
+		Attachments:        attachments,
+		ReactionInspection: inspectReactions(msg.Payload),
 	}
 	return m, nil
 }
@@ -160,6 +161,7 @@ func GetThread(ctx context.Context, svc *gmail.Service, labels *LabelCache, thre
 		messages[i].HTMLStatus = r.status
 		messages[i].BodyHTML = r.html
 		messages[i].HTMLTruncated = r.htmlTruncated
+		messages[i].ReactionInspection = inspectReactions(msg.Payload)
 	}
 	return &Thread{ThreadID: threadID, Messages: messages}, nil
 }

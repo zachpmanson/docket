@@ -58,27 +58,34 @@ const (
 // under. One shared flag would tell a caller its text was cut when it was
 // not, or its markup was whole when it was not. It appears only when true —
 // exactly when the markup on hand is incomplete.
+//
+// ReactionInspection is bounded structural evidence from the full MIME result,
+// independent of body display caps. It never replaces text/HTML or attachments.
+// A missing field from an older decoder means not inspected, not inspected-none.
 type Message struct {
 	Envelope
-	Body          string       `json:"body"`
-	Truncated     bool         `json:"truncated"`
-	HTMLStatus    string       `json:"html_status,omitempty"`
-	BodyHTML      string       `json:"body_html,omitempty"`
-	HTMLTruncated bool         `json:"html_truncated,omitempty"`
-	Attachments   []Attachment `json:"attachments,omitempty"`
+	Body               string              `json:"body"`
+	Truncated          bool                `json:"truncated"`
+	HTMLStatus         string              `json:"html_status,omitempty"`
+	BodyHTML           string              `json:"body_html,omitempty"`
+	HTMLTruncated      bool                `json:"html_truncated,omitempty"`
+	Attachments        []Attachment        `json:"attachments,omitempty"`
+	ReactionInspection *ReactionInspection `json:"reaction_inspection,omitempty"`
 }
 
 // ThreadMessage is one message inside a Thread: an envelope, plus the bodies
 // when the caller asked for them. Every body field is omitted when empty, so
 // a default thread read emits the same envelope-only objects it always has
-// and a caller parsing them needs no change.
+// and a caller parsing them needs no change. ReactionInspection is present only
+// for full-body reads (IncludeHTML); metadata-only reads have not inspected MIME.
 type ThreadMessage struct {
 	Envelope
-	Body          string `json:"body,omitempty"`
-	Truncated     bool   `json:"truncated,omitempty"`
-	HTMLStatus    string `json:"html_status,omitempty"`
-	BodyHTML      string `json:"body_html,omitempty"`
-	HTMLTruncated bool   `json:"html_truncated,omitempty"`
+	Body               string              `json:"body,omitempty"`
+	Truncated          bool                `json:"truncated,omitempty"`
+	HTMLStatus         string              `json:"html_status,omitempty"`
+	BodyHTML           string              `json:"body_html,omitempty"`
+	HTMLTruncated      bool                `json:"html_truncated,omitempty"`
+	ReactionInspection *ReactionInspection `json:"reaction_inspection,omitempty"`
 }
 
 // Thread is the shape returned by the `thread` command: the thread id plus
