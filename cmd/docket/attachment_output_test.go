@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -13,11 +15,16 @@ import (
 	"testing"
 
 	"github.com/zachpmanson/docket/gmail/auth"
+	"github.com/zachpmanson/docket/gmail/mail"
 	"github.com/zachpmanson/docket/internal/out"
 )
 
 func attachmentArgs(path string) []string {
 	return []string{"mail", "attachment", "--account", "default", "--id", "m1", "--part", "1", "--out", path}
+}
+
+func attachmentStdoutArgs(extra ...string) []string {
+	return append([]string{"mail", "attachment", "--account", "default", "--id", "m1", "--part", "1", "--stdout"}, extra...)
 }
 
 func assertAttachmentOutputDenied(t *testing.T, path string) {
@@ -59,6 +66,7 @@ func TestAttachmentRestrictedDeploymentRequiresRootBeforeCredentials(t *testing.
 				t.Fatal(err)
 			}
 			assertDenial(t, attachmentArgs(path), "default", "mail.attachment", "PERMISSION_DENIED")
+			assertDenial(t, attachmentStdoutArgs(), "default", "mail.attachment", "PERMISSION_DENIED")
 		})
 	}
 }
@@ -133,6 +141,31 @@ func TestAttachmentInvalidDestinationsDoNotReadOrMigrateTokens(t *testing.T) {
 	}
 }
 
+func TestAttachmentStdoutPreflight(t *testing.T) {
+	permissionSetup(t, "")
+	forbidNetwork(t)
+	t.Setenv("DOCKET_CAL_OWN_EVENTS_ONLY", "1")
+	for _, tc := range []struct {
+		args []string
+		code int
+		want string
+	}{
+		{attachmentStdoutArgs(), out.ExitError, "OUTPUT_WRITE_FAILED"}, // no operator opt-in
+		{attachmentStdoutArgs("--out", "ignored"), out.ExitUsage, "USAGE_ERROR"},
+		{attachmentStdoutArgs("--max-bytes", "-1"), out.ExitUsage, "USAGE_ERROR"},
+		{attachmentStdoutArgs("extra"), out.ExitUsage, "USAGE_ERROR"},
+	} {
+		output, code := captureStdout(t, func() int { return run(tc.args) })
+		var envelope out.Envelope
+		if err := json.Unmarshal([]byte(output), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if code != tc.code || envelope.OK || envelope.Error == nil || envelope.Error.Code != tc.want {
+			t.Fatalf("%v: code=%d output=%s", tc.args, code, output)
+		}
+	}
+}
+
 func TestAttachmentCLIRootedDownloads(t *testing.T) {
 	permissionSetup(t, "")
 	root := t.TempDir()
@@ -149,7 +182,8 @@ func TestAttachmentCLIRootedDownloads(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/messages/m1"):
-			_, _ = io.WriteString(w, `{"id":"m1","payload":{"partId":"1","filename":"image.png","mimeType":"image/png","body":{"size":5,"data":"aW1hZ2U"}}}`)
+			// Use non-text bytes; the metadata deliberately understates their size.
+			_, _ = io.WriteString(w, `{"id":"m1","payload":{"partId":"1","filename":"image.png","mimeType":"image/png","body":{"size":2,"data":"AP-AZQo"}}}`)
 		case strings.HasSuffix(r.URL.Path, "/labels"):
 			_, _ = io.WriteString(w, `{"labels":[]}`)
 		default:
@@ -163,15 +197,36 @@ func TestAttachmentCLIRootedDownloads(t *testing.T) {
 		return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
 	}
 	http.DefaultTransport = transport
+	want := "\x00\xff\x80e\n"
+	result, code := captureStdout(t, func() int { return run(attachmentStdoutArgs()) })
+	var reply struct {
+		OK   bool
+		Data mail.FetchedAttachment
+	}
+	if err := json.Unmarshal([]byte(result), &reply); err != nil {
+		t.Fatal(err)
+	}
+	if code != out.ExitOK || !reply.OK || reply.Data.Content == nil || string(*reply.Data.Content) != want ||
+		reply.Data.Size != int64(len(want)) || reply.Data.SHA256 != fmt.Sprintf("%x", sha256.Sum256([]byte(want))) ||
+		reply.Data.Path != "" || strings.Contains(result, `"path"`) {
+		t.Fatalf("stdout fetch: code=%d output=%s", code, result)
+	}
+	result, code = captureStdout(t, func() int { return run(attachmentStdoutArgs("--max-bytes", "3")) })
+	if code != out.ExitError || !strings.Contains(result, `"ATTACHMENT_TOO_LARGE"`) || strings.Contains(result, `"content_base64"`) {
+		t.Fatalf("stdout cap: code=%d output=%s", code, result)
+	}
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
+		t.Fatalf("stdout mode changed the protected spool: %v %v", entries, err)
+	}
 	for _, path := range []string{"relative.png", filepath.Join(root, "absolute.png")} {
 		output, code := captureStdout(t, func() int { return run(attachmentArgs(path)) })
-		if code != out.ExitOK {
+		if code != out.ExitOK || strings.Contains(output, `"content_base64"`) {
 			t.Fatalf("%s: %d %s", path, code, output)
 		}
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(root, path)
 		}
-		if got, err := os.ReadFile(path); err != nil || string(got) != "image" {
+		if got, err := os.ReadFile(path); err != nil || string(got) != want {
 			t.Fatalf("%q = %q %v", path, got, err)
 		}
 	}

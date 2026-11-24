@@ -242,10 +242,14 @@ Notes:
   parser swallows the remainder of the document into an attribute value. Elements left
   unclosed are fine; every html parser closes those implicitly.
 - `mail attachment` writes the bytes to `--out` and returns the path, size,
-  mime type, filename and a sha256 of the content in the envelope. The bytes do not go to
-  stdout: stdout carries the JSON envelope, and a caller that has to locate the envelope
-  inside a stream of PNG bytes cannot read a failure at all — which is the one thing it must
-  never lose. Nothing is resized, re-encoded or sniffed; the file holds what the sender sent.
+  MIME type, filename and SHA-256 of the content. Nothing is resized or sniffed.
+  On Naboo, pass `--out-dir <absolute-dir> --out <filename>` to save the file
+  as your own Unix user. The directory must already exist. For example:
+
+  ```sh
+  docket mail attachment --account default --id <gm-msgid> --part <part-id> \
+    --out-dir "$HOME/Downloads" --out document.pdf
+  ```
 - One part per invocation. Gmail has no batch attachments endpoint, so several parts in one
   call would save a subprocess spawn and not one round trip, and the result would need a
   per-part shape that the envelope's single `ok` cannot express — a call where three of five
@@ -266,8 +270,9 @@ Notes:
   `DOCKET_CAL_READONLY`, `DOCKET_CAL_OWN_EVENTS_ONLY`) is nonempty and no root is set,
   attachment output fails closed with `OUTPUT_WRITE_FAILED`. Unrestricted trusted
   same-UID CLI use without a root retains arbitrary output paths; it is not a sandbox.
-  Files remain private to the writing UID: a privileged runner's caller is **not**
-  automatically granted read access. See [operator rollout guidance](permissions.md#attachment-output-boundary).
+  With no `--out-dir`, Naboo files remain private to the protected writing UID.
+  `--out-dir` changes where your own process writes, not the protected spool.
+  See [operator guidance](permissions.md#attachment-output-boundary).
 - `--max-bytes` on `attachment` means the same as everywhere else, `0` included, and defaults
   to 10 MB. Over the cap is `ATTACHMENT_TOO_LARGE`, not a truncated file — half a PNG is not
   a smaller PNG, and once written to disk it is indistinguishable from a whole one. The cap

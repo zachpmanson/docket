@@ -272,25 +272,19 @@ The root is not a caller flag and must not be caller-overridable in a privileged
 runner; preserve sudo `env_reset` and clear/reject inherited overrides before
 setting the fixed value.
 
-### Companion Nix wiring and delivery limits
+### Naboo guarded runner
 
-The separately reviewed companion naboo Nix change should create
-`/var/lib/docket-agent/attachments` owned by `docket-agent`, mode `0700`, and set
-`DOCKET_ATTACHMENT_ROOT=/var/lib/docket-agent/attachments` inside the trusted
-runner. Keep it separate from protected config/state and ensure its parents are
-operator-controlled. Preserve existing permission/confirmation/ownership ceilings
-and auth allowlists. This source change intentionally modifies no Nix or live
-configuration; until that companion is deployed, attachments are unavailable in
-restricted environments rather than writable to arbitrary runner-owned paths.
+The runner sets `DOCKET_ATTACHMENT_ROOT=/var/lib/docket-agent/attachments`.
+The directory is private to `docket-agent` (`0700`); an ordinary `--out` path
+returned by the runner does not imply the caller can read it.
 
-A successful JSON result reports a path owned by the protected writing UID. It
-**does not** imply the untrusted caller can read it, nor does this change add a
-file-delivery endpoint, broaden ACLs, copy data across UIDs, or stream private
-attachments to stdout. If delivery is needed, separately review an authenticated,
-account-authorized, narrowly scoped handoff and retention/cleanup policy. Do not
-make the directory/world files readable or silently expose private mail merely
-to make a reported path accessible. Same-UID restricted deployments likewise
-need an operator-selected dedicated root if attachments are required.
+On the Naboo shim, `--out-dir <absolute-dir> --out <file>` opens the destination
+as the calling Unix user. It passes only fetch arguments through sudo. The
+backend applies the same account, `mail.attachment` permission and byte cap,
+then returns `content_base64` in a JSON envelope (`--stdout`) with no file write.
+The unprivileged side writes the verified bytes atomically, mode `0600`, and
+returns metadata only. Neither the destination path nor its permissions cross
+into the protected runner; no token, spool permission, or sudo rule is widened.
 
 ## Verification
 

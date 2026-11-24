@@ -360,11 +360,12 @@ Attachments are listed as metadata (filename, mime type, size, part id, and `con
 the parts a `cid:` URL references) and fetched only via an explicit `mail attachment --part`.
 
 `mail attachment` writes the bytes to `--out` and returns the path, size, mime type,
-filename and sha256 in the envelope. Bytes never go to stdout, because stdout is where the
-envelope goes: a caller hunting for the JSON inside a stream of PNG bytes cannot read a
-failure, and a failure is the one thing it must not lose. Base64 in the envelope was the
-other option and costs a third more bytes to produce a form the caller decodes back to a
-file anyway.
+filename and sha256 in the envelope. On Naboo, `--out-dir <absolute-dir>` asks
+the caller side of the guarded shim to write the file. The protected runner
+fetches it with the same account policy and size limit and returns it as base64
+in a JSON envelope. The local side checks the digest and size, writes the bytes
+under the caller’s permissions, and returns only the usual metadata. A caller
+path never controls a protected-UID write.
 
 One part per call. There is no batch attachments endpoint, so several parts in one call would
 save a subprocess spawn and not a round trip, and a partial result has no honest value for a

@@ -52,10 +52,7 @@ var (
 
 // FetchOptions are the per-call knobs for FetchAttachment.
 //
-// OutPath is required. Bytes go to a file rather than to stdout because
-// stdout carries the JSON envelope every docket command emits, and a caller
-// that has to find the envelope inside a stream of PNG bytes cannot read a
-// failure at all — see docket-design.md §4.
+// Specify OutPath for file output, or ReturnContent for bytes without a file.
 //
 // MaxBytes follows the --max-bytes convention: 0 (NoMaxBytes) is unlimited.
 type FetchOptions struct {
@@ -65,6 +62,8 @@ type FetchOptions struct {
 	// OutputRoot optionally confines all output to this operator-owned directory.
 	// Relative OutPath values resolve beneath it; absolute paths must be inside it.
 	OutputRoot string
+	// ReturnContent returns the decoded bytes in FetchedAttachment.Content.
+	ReturnContent bool
 
 	output *attachmentOutput
 }
@@ -82,6 +81,18 @@ func (opts *FetchOptions) PrepareOutput() (io.Closer, error) {
 	return output.parent, nil
 }
 
+// SaveContent writes already-fetched bytes to the prepared destination using
+// the current process's filesystem permissions.
+func (opts *FetchOptions) SaveContent(data []byte) (string, error) {
+	if opts.output == nil {
+		return "", fmt.Errorf("%w: destination not prepared", ErrOutputWrite)
+	}
+	if err := opts.output.write(data); err != nil {
+		return "", err
+	}
+	return opts.output.path, nil
+}
+
 // FetchedAttachment is what a successful fetch reports: where the bytes
 // landed, and enough about them for a caller to file them without a second
 // call.
@@ -90,20 +101,19 @@ func (opts *FetchOptions) PrepareOutput() (io.Closer, error) {
 // repeats itself heavily, and the digest is what lets a caller store one copy
 // and confirm that a re-fetch produced the same file.
 type FetchedAttachment struct {
-	MessageID string `json:"message_id"`
-	PartID    string `json:"part_id"`
-	Filename  string `json:"filename"`
-	MimeType  string `json:"mime_type"`
-	ContentID string `json:"content_id,omitempty"`
-	Size      int64  `json:"size"`
-	Path      string `json:"path"`
-	SHA256    string `json:"sha256"`
+	MessageID string  `json:"message_id"`
+	PartID    string  `json:"part_id"`
+	Filename  string  `json:"filename"`
+	MimeType  string  `json:"mime_type"`
+	ContentID string  `json:"content_id,omitempty"`
+	Size      int64   `json:"size"`
+	Path      string  `json:"path,omitempty"`
+	SHA256    string  `json:"sha256"`
+	Content   *[]byte `json:"content_base64,omitempty"` // JSON encodes byte slices as base64.
 }
 
-// FetchAttachment writes one attachment's bytes to opts.OutPath and reports
-// where they went. The bytes are the sender's, byte for byte: no resizing, no
-// re-encoding, no format sniffing. A consumer deciding whether to thumbnail
-// an image needs the original to decide from.
+// FetchAttachment writes or returns one attachment's original decoded bytes.
+// It does not resize or sniff the content.
 //
 // The cap is enforced against the size Gmail reports in the message metadata
 // before the content call is made, so an oversized attachment costs one cheap
@@ -119,11 +129,14 @@ func FetchAttachment(ctx context.Context, svc *gmail.Service, id string, opts Fe
 	if opts.MaxBytes < 0 {
 		return nil, fmt.Errorf("--max-bytes %d: %w", opts.MaxBytes, ErrNegativeAttachmentMaxBytes)
 	}
-	if opts.OutPath == "" {
-		return nil, errors.New("--out is required: an attachment's bytes are written to a file, not to stdout")
+	switch {
+	case opts.ReturnContent && opts.OutPath != "":
+		return nil, errors.New("cannot combine a file output path with returned content")
+	case !opts.ReturnContent && opts.OutPath == "":
+		return nil, errors.New("--out is required unless returning content")
 	}
 
-	if opts.output == nil {
+	if !opts.ReturnContent && opts.output == nil {
 		closer, err := opts.PrepareOutput()
 		if err != nil {
 			return nil, err
@@ -160,21 +173,25 @@ func FetchAttachment(ctx context.Context, svc *gmail.Service, id string, opts Fe
 		return nil, err
 	}
 
-	if err := opts.output.write(data); err != nil {
-		return nil, err
-	}
-
 	sum := sha256.Sum256(data)
-	return &FetchedAttachment{
+	got := &FetchedAttachment{
 		MessageID: id,
 		PartID:    opts.PartID,
 		Filename:  part.Filename,
 		MimeType:  part.MimeType,
 		ContentID: contentID(part),
 		Size:      int64(len(data)),
-		Path:      opts.output.path,
 		SHA256:    hex.EncodeToString(sum[:]),
-	}, nil
+	}
+	if opts.ReturnContent {
+		got.Content = &data
+	} else {
+		got.Path, err = opts.SaveContent(data)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return got, nil
 }
 
 // attachmentData returns a part's decoded bytes, from the separate

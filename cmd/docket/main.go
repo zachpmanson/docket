@@ -25,6 +25,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) >= 3 && os.Args[1] == "__guarded" {
+		os.Exit(runGuarded(os.Args[2], os.Args[3:]))
+	}
 	os.Exit(run(os.Args[1:]))
 }
 
@@ -73,7 +76,7 @@ func extractAccountFlag(args []string) ([]string, string, error) {
 		// body-file values and accidentally authorizing a different account.
 		if strings.HasPrefix(arg, "-") && !strings.Contains(arg, "=") {
 			switch strings.TrimLeft(arg, "-") {
-			case "confirm", "dry-run", "verbose", "all", "html", "unread", "reply-all", "all-day", "help", "h":
+			case "confirm", "dry-run", "verbose", "all", "html", "unread", "reply-all", "all-day", "stdout", "help", "h":
 			default:
 				if i+1 < len(args) {
 					i++
@@ -752,7 +755,7 @@ func cmdMailThread(ctx context.Context, args []string) int {
 	return out.EmitResult(out.Result{Data: thread, Verbose: verbose()})
 }
 
-// cmdMailAttachment fetches one part's bytes to a file. One part per
+// cmdMailAttachment fetches one part's bytes to a file or the JSON response. One part per
 // invocation: the Gmail API has no batch attachments endpoint, so fetching
 // several in one call would save a subprocess spawn and not a single round
 // trip, and it would need a per-part result shape that the envelope's one
@@ -761,13 +764,14 @@ func cmdMailThread(ctx context.Context, args []string) int {
 // metadata already has the outcome of each part separately, which is what it
 // needs to record which ones are missing.
 func cmdMailAttachment(ctx context.Context, args []string) int {
-	const usage = "docket mail attachment --id <gm-id> --part <part-id> --out <path> " +
+	const usage = "docket mail attachment --id <gm-id> --part <part-id> (--out <path> | --stdout) " +
 		"[--max-bytes 10485760 (0 = no cap)]"
 
 	fs := newFlagSet("mail attachment")
 	id := fs.String("id", "", "Gmail message id, from a search/list/thread result")
 	part := fs.String("part", "", "part id of the attachment, from an attachments entry in `mail read` output")
 	outPath := fs.String("out", "", "file to write; relative to DOCKET_ATTACHMENT_ROOT when set; its directory must already exist")
+	stdout := fs.Bool("stdout", false, "return content_base64 in the JSON result instead of writing a file")
 	maxBytes := fs.Int("max-bytes", mail.DefaultAttachmentMaxBytes,
 		"refuse an attachment larger than this many bytes; 0 fetches any size")
 	if err := fs.Parse(args); err != nil {
@@ -781,9 +785,8 @@ func cmdMailAttachment(ctx context.Context, args []string) int {
 		return usageError("--part is required and must not be empty",
 			usage+"; part ids come from the attachments list in `mail read` output")
 	}
-	if *outPath == "" {
-		return usageError("--out is required and must not be empty",
-			usage+"; the bytes are written to a file because stdout carries the JSON envelope")
+	if fs.NArg() != 0 || (*outPath != "") == *stdout {
+		return usageError("choose exactly one of --out <path> and --stdout, with no positional arguments", usage)
 	}
 	if *maxBytes < 0 {
 		return usageError(
@@ -793,7 +796,7 @@ func cmdMailAttachment(ctx context.Context, args []string) int {
 
 	opts := mail.FetchOptions{
 		PartID: *part, MaxBytes: *maxBytes, OutPath: *outPath,
-		OutputRoot: os.Getenv("DOCKET_ATTACHMENT_ROOT"),
+		OutputRoot: os.Getenv("DOCKET_ATTACHMENT_ROOT"), ReturnContent: *stdout,
 	}
 	if opts.OutputRoot == "" {
 		for _, env := range []string{"DOCKET_READONLY", "DOCKET_MAIL_READONLY", "DOCKET_CAL_READONLY", "DOCKET_CAL_OWN_EVENTS_ONLY"} {
@@ -802,11 +805,13 @@ func cmdMailAttachment(ctx context.Context, args []string) int {
 			}
 		}
 	}
-	output, err := opts.PrepareOutput()
-	if err != nil {
-		return failMailAttachment(err)
+	if !*stdout {
+		output, err := opts.PrepareOutput()
+		if err != nil {
+			return failMailAttachment(err)
+		}
+		defer output.Close()
 	}
-	defer output.Close()
 
 	svc, _, code := mailContext(ctx)
 	if code != out.ExitOK {
