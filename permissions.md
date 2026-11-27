@@ -6,6 +6,28 @@ attachment output. The reusable Gmail library is not a security sandbox: callers
 with direct access to tokens can bypass any CLI policy. Keep credentials and the
 policy outside an untrusted caller's UID, as naboo's privileged runner does.
 
+## First-time account setup
+
+On a trusted machine, copy [`gmail/config/config.toml`](gmail/config/config.toml)
+to `$XDG_CONFIG_HOME/docket/config.toml` (default `~/.config/docket/config.toml`).
+Create the directory if needed; edit rather than replace an existing config.
+Set `default_calendar` to your intended write calendar ID or remove the sample value.
+The sample uses Mozilla Thunderbird's OAuth client; Google attributes consent to
+Thunderbird. Register your own client for anything beyond personal use (see
+[known risks](docket-design.md#8-known-risks)).
+
+For the first `default` profile, a human must explicitly grant `"auth.login" = true`
+in `[permissions.accounts.default]`. Run `docket auth login --account default`
+and follow the printed URL and, on a headless host, the SSH tunnel instructions.
+The listener binds to loopback; `--port 8081` overrides the default `8080` if taken.
+Verify the selected identity with `docket auth whoami --account default` before use.
+Remove the login grant when no longer needed. Do not clear runner restrictions to
+make human setup work; managed deployments use their own operator policy.
+
+Token files and exports are private credentials. If you explicitly authorize
+import/export between trusted machines, protect any temporary export and remove
+it after import. Do not put credentials in logs or source control.
+
 ## Settings schema (TOML, not JSON)
 
 Settings remain `$XDG_CONFIG_HOME/docket/config.toml` (default

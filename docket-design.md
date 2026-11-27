@@ -110,13 +110,10 @@ scopes = [
 `email` is required for `auth whoami` to resolve the account address via Google's tokeninfo
 endpoint — without it the token carries no identity claim and whoami's `email` field is empty.
 
-This exact file ships in the repo at `config/config.toml` — copy it to
-`~/.config/docket/config.toml` (or point `XDG_CONFIG_HOME` at a directory containing a
-`docket/` subdir with it). It's safe to commit: the Thunderbird client_id/secret aren't a
-secret Zach controls, already public in Mozilla's own source (see §8). A deployment that
-provisions this file automatically (e.g. a NixOS host's activation script) still needs
-`auth login` + `auth export`/`auth import` run separately per §3 — the config file alone
-grants no account access, only the provider registration.
+The [sample config](gmail/config/config.toml) uses Thunderbird's public client
+registration (see §8). Provisioning it does not grant access to any Google account.
+Follow [first-time setup](permissions.md#first-time-account-setup) for login and
+credential handling; managed deployments may impose stricter controls.
 
 Ship a `--provider=custom` path that reads `client_id`/`client_secret` from env so that
 migrating means setting two environment variables.
@@ -132,8 +129,9 @@ ssh -L 8080:localhost:8080 server
 
 Then open the URL in the laptop browser; the redirect tunnels back to the listener.
 
-Also implement `docket auth import --token-file -` so you can run the flow on your laptop
-and pipe the resulting token to the server. Refresh tokens aren't machine-bound.
+On trusted machines, explicitly authorized `auth export` writes the token to stdout
+and `auth import` reads it from stdin. Refresh tokens aren't machine-bound; handle any
+transfer as a credential (see [account setup](permissions.md#first-time-account-setup)).
 
 A process that already serves HTTP (an embedded server) hosts the callback itself instead
 of the CLI listener: call `BeginLogin(provider, redirectURI)` to obtain the authorization
@@ -284,6 +282,7 @@ docket mail search  --query "from:emiel is:unread" [--limit 25] [--page-token <t
 docket mail list    --label INBOX [--limit 25] [--page-token <tok>] [--unread]
 docket mail read    --id <gm-msgid> [--max-bytes 20000|0] [--html]
 docket mail thread  --id <gm-thrid> [--html [--max-bytes 20000|0]]
+docket mail attachment --id <gm-msgid> --part <part-id> --out <path> [--max-bytes <bytes>]
 docket mail send    --to ... --subject ... --body-file - [--confirm]
 docket mail reply   --id <gm-msgid> --body-file - [--reply-all] [--confirm]
 docket mail label   --id <gm-msgid> --add Foo --remove INBOX [--confirm]
@@ -365,7 +364,12 @@ the caller side of the guarded shim to write the file. The protected runner
 fetches it with the same account policy and size limit and returns it as base64
 in a JSON envelope. The local side checks the digest and size, writes the bytes
 under the caller’s permissions, and returns only the usual metadata. A caller
-path never controls a protected-UID write.
+path never controls a protected-UID write. The directory must exist; choose a fresh
+filename to avoid replacing an existing file. See the
+[attachment output boundary](permissions.md#attachment-output-boundary) for runner policy.
+
+The attachment byte cap defaults to 10 MiB (`0` disables it). Exceeding the cap
+returns `ATTACHMENT_TOO_LARGE`, never a truncated file.
 
 One part per call. There is no batch attachments endpoint, so several parts in one call would
 save a subprocess spawn and not a round trip, and a partial result has no honest value for a
@@ -675,7 +679,31 @@ MCP rather than shelling out — same registry, different transport.
 
 ---
 
-## 7. Build order
+## 7. Development
+
+`nix develop` provides the Go toolchain; `make build` builds the CLI.
+
+### Nix CI
+
+The [CI workflow](.github/workflows/ci.yml) runs `Nix CI` on pull requests and
+pushes to `master`. Require that check in branch protection to make it a merge gate.
+To reproduce the Nix checks locally:
+
+```sh
+nix build .#default.goModules
+nix build .#default.goModules --rebuild
+nix develop --command make test vet
+nix flake check
+nix build .#default
+```
+
+The first command realizes the dependency output; the second rebuilds it to catch
+an outdated `vendorHash` that a cached package build could miss. The local `gmail/`
+replacement is excluded from the hash-checked vendor output and restored before
+compilation. Dependency or module metadata changes can require a new hash; local
+implementation-only changes do not.
+
+### Original build order
 
 | Phase | Scope | Done when |
 |---|---|---|
