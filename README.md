@@ -10,18 +10,21 @@ docket [--account <name>] <auth|mail|cal> <subcommand> [flags]
 
 ## Examples
 
-After [account setup](permissions.md#first-time-account-setup), search Gmail, read a result by ID, or discover calendar IDs. These examples use fictional data; `jq` shows selected fields from Docket's JSON output.
+After [account setup](permissions.md#first-time-account-setup), run `docket` from your `PATH`. Output is human-readable in a terminal and JSON when piped or redirected.
 
 ```console
-$ ./result/bin/docket --account default mail search \
-    --query 'from:alex@example.com is:unread' --limit 5 | jq -c '.data[] | {id, subject}'
-{"id":"msg123","subject":"Launch notes"}
+$ docket --account default mail search --query 'from:alex@example.com is:unread' --limit 5
+ID      THREAD_ID  FROM              TO                  SUBJECT       DATE  LABELS         SNIPPET
+msg123  thread123  alex@example.com  reader@example.com  Launch notes        INBOX, UNREAD  The draft is ready for review.
 
-$ ./result/bin/docket --account default mail read --id msg123 | jq -r '.data.body'
-The draft is ready for review.
+$ docket --account default mail read --id msg123
+…
+body:            The draft is ready for review.
+…
 
-$ ./result/bin/docket --account default cal list | jq -c '.data[]'
-{"id":"reader@example.com","name":"Personal"}
+$ docket --account default cal list
+ID                  NAME
+reader@example.com  Personal
 ```
 
 [Mail](docket-design.md#4-mail) · [Calendar](docket-design.md#5-calendar) · [Output format](docket-design.md#6-agent-interface-contract) · [Permissions](permissions.md)
